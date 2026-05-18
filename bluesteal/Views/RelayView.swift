@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct RelayView: View {
     @Environment(RelayClient.self) private var relay
@@ -34,10 +35,25 @@ struct RelayView: View {
             }
 
             Spacer()
+
+            openLogsLink
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+    }
+
+    private var openLogsLink: some View {
+        Button("Open logs") {
+            let dir = RelayTracer.standardLogDirectory
+            try? FileManager.default.createDirectory(at: dir,
+                                                     withIntermediateDirectories: true)
+            NSWorkspace.shared.open(dir)
+        }
+        .controlSize(.small)
+        .buttonStyle(.borderless)
+        .foregroundStyle(.secondary)
+        .font(.caption)
     }
 
     // MARK: - Sections

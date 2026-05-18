@@ -63,7 +63,7 @@ struct ContentView: View {
 
 #Preview {
     let store = AdvertStore(logger: JSONLLogger())
-    let relay = RelayClient()
+    let relay = RelayClient(tracer: RelayTracer())
     return ContentView()
         .environment(CableScanner(previewMode: true))
         .environment(store)

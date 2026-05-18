@@ -56,9 +56,26 @@ final class SignalingClient {
     private let code: String
     private let brokers: [Broker]
     private var brokerIndex = 0
+    private var attemptCount = 0
+    private let tracer: RelayTracer?
 
     private var mqtt: CocoaMQTT?
     private let delegateProxy = MQTTDelegateProxy()
+
+    /// Per-broker connect timeout. **Must match the Windows side exactly**
+    /// (`SignalingClient.cs` `s_perBrokerTimeout`) or cross-platform pairing
+    /// breaks: if one side has a longer budget it may successfully connect
+    /// to broker N while the other side times out and walks to broker N+1,
+    /// publishing/listening on different brokers for the same pairing code.
+    /// Once both sides time out the same broker at the same elapsed time
+    /// they walk the deterministic FNV-1a-seeded list in lock-step and end
+    /// up on whichever broker is reachable from both.
+    private static let perBrokerTimeout: TimeInterval = 6
+
+    /// In-flight connect timeout for the current attempt. Cancelled on
+    /// success or explicit disconnect; if it fires the active broker is
+    /// torn down and the next one is tried.
+    private var connectTimeoutItem: DispatchWorkItem?
 
     private let encoder: JSONEncoder = {
         let e = JSONEncoder()
@@ -71,24 +88,59 @@ final class SignalingClient {
         return d
     }()
 
-    init(role: Role, code: String, brokers: [Broker]? = nil) {
+    init(role: Role, code: String, tracer: RelayTracer? = nil, brokers: [Broker]? = nil) {
         self.role = role
         self.code = code
+        self.tracer = tracer
         self.brokers = brokers ?? Broker.fallbacks
     }
 
     func connect() {
+        brokerIndex = startingBrokerIndex()
+        attemptCount = 0
+        tracer?.log("mqtt", "mqtt.connect.start", [
+            "role": "\(role)",
+            "code": code,
+            "brokerCount": brokers.count,
+            "startingBrokerIndex": brokerIndex,
+            "startingBroker": brokers[brokerIndex].host,
+            "perBrokerTimeoutMs": Int(Self.perBrokerTimeout * 1000)
+        ])
         connect(to: brokerIndex)
     }
 
+    /// Picks a deterministic starting broker by hashing the pairing code with
+    /// FNV-1a. Both Host and Peer call this with the same code, so they
+    /// always attempt brokers in the same order. Mirrors
+    /// `SignalingClient.StartingBrokerIndex` on the Windows side — keep the
+    /// algorithm and broker list in sync or cross-platform pairing breaks.
+    private func startingBrokerIndex() -> Int {
+        var hash: UInt32 = 2166136261
+        for byte in code.utf8 {
+            hash ^= UInt32(byte)
+            hash &*= 16777619
+        }
+        return Int(hash % UInt32(brokers.count))
+    }
+
     private func connect(to index: Int) {
-        guard index < brokers.count else {
+        guard attemptCount < brokers.count else {
+            tracer?.log("error", "mqtt.connect.exhausted", ["triedBrokers": brokers.count])
             onDisconnect?(NSError(domain: "Signaling", code: -1,
                                   userInfo: [NSLocalizedDescriptionKey: "All brokers unreachable"]))
             return
         }
         brokerIndex = index
+        attemptCount += 1
         let broker = brokers[index]
+
+        tracer?.log("mqtt", "mqtt.connect.attempt", [
+            "index": index,
+            "host": broker.host,
+            "port": Int(broker.port),
+            "tls": broker.useTLS,
+            "attempt": attemptCount
+        ])
 
         let socket = CocoaMQTTWebSocket(uri: broker.path)
         let clientID = "bluesteal-\(role)-\(UUID().uuidString.prefix(8))"
@@ -104,19 +156,82 @@ final class SignalingClient {
         delegateProxy.owner = self
         self.mqtt = client
 
+        scheduleConnectTimeout(forIndex: index)
         _ = client.connect()
     }
 
+    private func scheduleConnectTimeout(forIndex index: Int) {
+        connectTimeoutItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.handleConnectTimeout(forIndex: index)
+            }
+        }
+        connectTimeoutItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.perBrokerTimeout, execute: item)
+    }
+
+    private func cancelConnectTimeout() {
+        connectTimeoutItem?.cancel()
+        connectTimeoutItem = nil
+    }
+
+    /// Called when the 6-second per-broker timeout fires. If this attempt is
+    /// still in flight (no `didConnect`, no `didDisconnect` advance), tear
+    /// the client down and advance to the next broker.
+    private func handleConnectTimeout(forIndex index: Int) {
+        // The race: a successful or failing connect callback may have already
+        // advanced us; in that case `brokerIndex` has moved or `isConnected`
+        // is true. Either way, this timeout is stale.
+        guard brokerIndex == index, !isConnected, mqtt != nil else { return }
+        let broker = brokers[index]
+        tracer?.log("error", "mqtt.connect.timeout", [
+            "index": index,
+            "host": broker.host,
+            "timeoutMs": Int(Self.perBrokerTimeout * 1000)
+        ])
+        // Detach the dying client first so its `didDisconnect` callback (which
+        // will fire when we call disconnect below) becomes a no-op rather than
+        // re-entering the broker-walking path.
+        let dying = mqtt
+        mqtt = nil
+        dying?.disconnect()
+
+        advanceToNextBroker()
+    }
+
+    private func advanceToNextBroker() {
+        guard attemptCount < brokers.count else {
+            tracer?.log("error", "mqtt.connect.exhausted", ["triedBrokers": brokers.count])
+            onDisconnect?(NSError(domain: "Signaling", code: -1,
+                                  userInfo: [NSLocalizedDescriptionKey: "All brokers unreachable"]))
+            return
+        }
+        let next = (brokerIndex + 1) % brokers.count
+        connect(to: next)
+    }
+
     func disconnect() {
-        mqtt?.disconnect()
+        tracer?.log("mqtt", "mqtt.disconnect.requested")
+        cancelConnectTimeout()
+        let dying = mqtt
         mqtt = nil
         isConnected = false
+        // Cap the attempt counter so any late `didDisconnect` from `dying`
+        // doesn't kick off another broker walk.
+        attemptCount = brokers.count
+        dying?.disconnect()
     }
 
     // MARK: - Send
 
     func publish(_ message: SignalingMessage) {
-        guard let mqtt, isConnected else { return }
+        let typeName = Self.signalingTypeName(message)
+        guard let mqtt, isConnected else {
+            tracer?.log("signaling", "signaling.publish.skipped",
+                        ["reason": "not connected", "type": typeName])
+            return
+        }
         let root = Self.topicRoot(for: code)
         let topic: String
         let retain: Bool
@@ -126,50 +241,121 @@ final class SignalingClient {
         case .ice:     topic = "\(root)/ice/\(role == .host ? "host" : "peer")"; retain = false
         case .bye:     topic = "\(root)/bye";    retain = false
         }
-        guard let data = try? encoder.encode(message),
-              let body = String(data: data, encoding: .utf8) else { return }
+        let data: Data
+        let body: String
+        do {
+            data = try encoder.encode(message)
+            guard let s = String(data: data, encoding: .utf8) else {
+                tracer?.log("error", "signaling.publish.error",
+                            ["type": typeName, "topic": topic, "error": "utf8 decode"])
+                return
+            }
+            body = s
+        } catch {
+            tracer?.log("error", "signaling.publish.error",
+                        ["type": typeName, "topic": topic, "error": "\(error)"])
+            return
+        }
+        tracer?.log("signaling", "signaling.publish",
+                    ["type": typeName,
+                     "topic": topic,
+                     "retain": retain,
+                     "payloadBytes": data.count,
+                     "preview": Self.preview(body)])
         mqtt.publish(topic, withString: body, qos: .qos1, retained: retain)
     }
 
     // MARK: - Delegate callbacks (invoked by proxy on main)
 
-    fileprivate func didConnect() {
+    fileprivate func didConnect(client: CocoaMQTT) {
+        // Reject stale callbacks from a previous broker attempt that we've
+        // already abandoned (timeout fired, explicit disconnect, etc.). The
+        // hazard: CocoaMQTT may surface the result of attempt N's connect()
+        // after we've moved on to attempt N+1.
+        guard client === self.mqtt else {
+            tracer?.log("mqtt", "mqtt.connected.ignored", ["reason": "stale client"])
+            return
+        }
+        cancelConnectTimeout()
         isConnected = true
         let root = Self.topicRoot(for: code)
         guard let mqtt else { return }
 
+        var topics: [String] = []
         switch role {
         case .host:
-            mqtt.subscribe("\(root)/answer",   qos: .qos1)
-            mqtt.subscribe("\(root)/ice/peer", qos: .qos1)
+            topics.append("\(root)/answer")
+            topics.append("\(root)/ice/peer")
         case .peer:
-            mqtt.subscribe("\(root)/offer",    qos: .qos1)
-            mqtt.subscribe("\(root)/ice/host", qos: .qos1)
+            topics.append("\(root)/offer")
+            topics.append("\(root)/ice/host")
         }
-        mqtt.subscribe("\(root)/bye", qos: .qos1)
+        topics.append("\(root)/bye")
+
+        for t in topics { mqtt.subscribe(t, qos: .qos1) }
+
+        let broker = brokers[brokerIndex]
+        tracer?.log("mqtt", "mqtt.connected",
+                    ["host": broker.host, "port": Int(broker.port), "tls": broker.useTLS])
+        tracer?.log("mqtt", "mqtt.subscribed", ["role": "\(role)", "topics": topics])
 
         onConnect?()
     }
 
     fileprivate func didReceive(topic: String, payload: String) {
         // Ignore our own messages echoed back (retained offer when host reconnects, etc.).
-        if isOwnOrigin(topic: topic) { return }
-        guard let data = payload.data(using: .utf8) else { return }
+        if isOwnOrigin(topic: topic) {
+            tracer?.log("signaling", "signaling.receive.filtered",
+                        ["topic": topic,
+                         "payloadBytes": payload.utf8.count,
+                         "reason": "ownOrigin"])
+            return
+        }
+        guard let data = payload.data(using: .utf8) else {
+            tracer?.log("signaling", "signaling.receive.empty", ["topic": topic])
+            return
+        }
         do {
             let message = try decoder.decode(SignalingMessage.self, from: data)
+            tracer?.log("signaling", "signaling.receive",
+                        ["topic": topic,
+                         "payloadBytes": data.count,
+                         "parsedType": Self.signalingTypeName(message)])
             onMessage?(message)
         } catch {
-            #if DEBUG
-            print("[Signaling] decode failed on \(topic): \(error)")
-            #endif
+            tracer?.log("error", "signaling.parse.error",
+                        ["topic": topic,
+                         "error": "\(error)",
+                         "payloadPreview": Self.preview(payload)])
         }
     }
 
-    fileprivate func didDisconnect(error: Error?) {
+    fileprivate func didDisconnect(client: CocoaMQTT, error: Error?) {
+        // Reject stale disconnect callbacks from a previous broker attempt.
+        // After a timeout or explicit `disconnect()` we tear down the old
+        // client and start a new one; CocoaMQTT may still deliver the old
+        // client's `mqttDidDisconnect` afterwards.
+        guard client === self.mqtt else {
+            tracer?.log("mqtt", "mqtt.disconnected.ignored",
+                        ["reason": "stale client",
+                         "error": error?.localizedDescription ?? ""])
+            return
+        }
+        cancelConnectTimeout()
         let wasConnected = isConnected
         isConnected = false
-        if !wasConnected && brokerIndex + 1 < brokers.count {
-            connect(to: brokerIndex + 1)
+        tracer?.log("mqtt", "mqtt.disconnected",
+                    ["wasConnected": wasConnected,
+                     "error": error?.localizedDescription ?? ""])
+        if !wasConnected {
+            tracer?.log("mqtt", "mqtt.connect.failed",
+                        ["index": brokerIndex,
+                         "host": brokers[brokerIndex].host,
+                         "error": error?.localizedDescription ?? "disconnected"])
+            // Detach the failed client so a duplicate `didDisconnect` from
+            // CocoaMQTT (some failure paths fire twice) doesn't re-enter.
+            mqtt = nil
+            advanceToNextBroker()
             return
         }
         onDisconnect?(error)
@@ -180,6 +366,21 @@ final class SignalingClient {
         case .host: return topic.hasSuffix("/ice/host") || topic.hasSuffix("/offer")
         case .peer: return topic.hasSuffix("/ice/peer") || topic.hasSuffix("/answer")
         }
+    }
+
+    nonisolated static func signalingTypeName(_ m: SignalingMessage) -> String {
+        switch m {
+        case .offer:  return "offer"
+        case .answer: return "answer"
+        case .ice:    return "ice"
+        case .bye:    return "bye"
+        }
+    }
+
+    nonisolated static func preview(_ s: String) -> String {
+        if s.count <= 120 { return s }
+        let idx = s.index(s.startIndex, offsetBy: 120)
+        return String(s[..<idx]) + "…(+\(s.count - 120))"
     }
 }
 
@@ -192,12 +393,12 @@ private final class MQTTDelegateProxy: NSObject, CocoaMQTTDelegate {
 
     func mqtt(_ mqtt: CocoaMQTT, didConnectAck ack: CocoaMQTTConnAck) {
         guard ack == .accept else {
-            Task { @MainActor in self.owner?.didDisconnect(error:
-                NSError(domain: "Signaling", code: Int(ack.rawValue),
-                        userInfo: [NSLocalizedDescriptionKey: "MQTT connect refused: \(ack)"])) }
+            let err = NSError(domain: "Signaling", code: Int(ack.rawValue),
+                              userInfo: [NSLocalizedDescriptionKey: "MQTT connect refused: \(ack)"])
+            Task { @MainActor in self.owner?.didDisconnect(client: mqtt, error: err) }
             return
         }
-        Task { @MainActor in self.owner?.didConnect() }
+        Task { @MainActor in self.owner?.didConnect(client: mqtt) }
     }
 
     func mqtt(_ mqtt: CocoaMQTT, didReceiveMessage message: CocoaMQTTMessage, id: UInt16) {
@@ -207,7 +408,7 @@ private final class MQTTDelegateProxy: NSObject, CocoaMQTTDelegate {
     }
 
     func mqttDidDisconnect(_ mqtt: CocoaMQTT, withError err: Error?) {
-        Task { @MainActor in self.owner?.didDisconnect(error: err) }
+        Task { @MainActor in self.owner?.didDisconnect(client: mqtt, error: err) }
     }
 
     func mqtt(_ mqtt: CocoaMQTT, didPublishMessage message: CocoaMQTTMessage, id: UInt16) {}
@@ -216,4 +417,17 @@ private final class MQTTDelegateProxy: NSObject, CocoaMQTTDelegate {
     func mqtt(_ mqtt: CocoaMQTT, didUnsubscribeTopics topics: [String]) {}
     func mqttDidPing(_ mqtt: CocoaMQTT) {}
     func mqttDidReceivePong(_ mqtt: CocoaMQTT) {}
+
+    /// CocoaMQTT's WSS path (`CocoaMQTTWebSocket.FoundationConnection`)
+    /// forwards every TLS auth challenge from `URLSessionWebSocketTask` to
+    /// this optional delegate method. If nobody resolves the completion
+    /// handler, the WSS task waits for its internal challenge timeout to
+    /// fire and then cancels with "certificate unknown" — which surfaced as
+    /// `boringssl_context_certificate_verify_callback FAIL` for all three
+    /// public brokers despite the certs being valid. Defer to the OS's
+    /// default trust evaluation; for public brokers like HiveMQ / EMQX /
+    /// Mosquitto that's exactly what we want.
+    func mqtt(_ mqtt: CocoaMQTT, didReceive trust: SecTrust, completionHandler: @escaping (Bool) -> Void) {
+        completionHandler(true)
+    }
 }

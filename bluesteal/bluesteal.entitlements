@@ -8,5 +8,11 @@
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<!-- Required for WebRTC ICE gathering: WebRTC binds UDP sockets locally
+	     to receive STUN/TURN responses and to accept inbound UDP for ICE
+	     candidate pairs. Without this, the sandbox blocks the binds and only
+	     TCP-active host candidates get gathered, which cannot pair.  -->
+	<key>com.apple.security.network.server</key>
+	<true/>
 </dict>
 </plist>

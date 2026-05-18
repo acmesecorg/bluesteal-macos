@@ -95,7 +95,11 @@ extension CableAdvert {
     nonisolated init?(wire: RelayMessage.Advert) {
         guard let peripheralID = UUID(uuidString: wire.peripheralID),
               let payload = Data(hex: wire.payloadHex) else { return nil }
-        let serviceUUID = wire.serviceUUID.map { CBUUID(string: $0) }
+        // Defensive: an older Windows peer (pre-Phase-1 schema) sends "0000"
+        // as a placeholder for "no service UUID" instead of omitting the
+        // field. Treat it as nil so the row doesn't end up with a phantom
+        // 0x0000 CBUUID.
+        let serviceUUID: CBUUID? = wire.serviceUUID.flatMap { $0 == "0000" ? nil : CBUUID(string: $0) }
         let variant = AdvertVariant(wireName: wire.variant)
         let manufacturerData = wire.manufacturerHex.flatMap(Data.init(hex:))
         let advertisedServiceUUIDs = (wire.advertisedServiceUUIDs ?? []).map { CBUUID(string: $0) }

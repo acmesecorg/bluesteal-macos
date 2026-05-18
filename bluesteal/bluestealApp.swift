@@ -15,9 +15,17 @@ struct bluestealApp: App {
     @State private var advertRelay: AdvertRelay
 
     init() {
+        let tracer = RelayTracer()
+        tracer.log("app", "app.start", [
+            "bundleId": Bundle.main.bundleIdentifier ?? "",
+            "bundleVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
+            "os": ProcessInfo.processInfo.operatingSystemVersionString,
+            "logFile": tracer.logFileURL.path
+        ])
+
         let scanner = CableScanner()
         let store = AdvertStore(logger: JSONLLogger())
-        let relay = RelayClient()
+        let relay = RelayClient(tracer: tracer)
         let advertRelay = AdvertRelay(store: store, relay: relay)
         _scanner = State(initialValue: scanner)
         _store = State(initialValue: store)

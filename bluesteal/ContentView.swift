@@ -8,6 +8,8 @@ import SwiftUI
 struct ContentView: View {
     @Environment(CableScanner.self) private var scanner
     @Environment(AdvertStore.self) private var store
+    @Environment(RelayClient.self) private var relay
+    @Environment(AdvertRelay.self) private var advertRelay
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,7 +24,11 @@ struct ContentView: View {
 
             Divider()
 
-            if store.adverts.isEmpty {
+            RelayView()
+
+            Divider()
+
+            if store.adverts.isEmpty && advertRelay.received.isEmpty {
                 ContentUnavailableView {
                     Label("Waiting for caBLE adverts", systemImage: "antenna.radiowaves.left.and.right")
                 } description: {
@@ -31,8 +37,17 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                List(store.adverts) { advert in
-                    AdvertRowView(advert: advert)
+                List {
+                    if !store.adverts.isEmpty {
+                        Section("Local") {
+                            ForEach(store.adverts) { AdvertRowView(advert: $0) }
+                        }
+                    }
+                    if !advertRelay.received.isEmpty {
+                        Section("From peer") {
+                            ForEach(advertRelay.received) { AdvertRowView(advert: $0) }
+                        }
+                    }
                 }
                 .listStyle(.inset)
             }
@@ -47,7 +62,11 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    let store = AdvertStore(logger: JSONLLogger())
+    let relay = RelayClient()
+    return ContentView()
         .environment(CableScanner(previewMode: true))
-        .environment(AdvertStore(logger: JSONLLogger()))
+        .environment(store)
+        .environment(relay)
+        .environment(AdvertRelay(store: store, relay: relay))
 }

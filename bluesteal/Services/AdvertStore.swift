@@ -17,6 +17,11 @@ final class AdvertStore {
 
     private let logger: JSONLLogger
 
+    /// Called for every fresh-or-updated advert after the store mutates. The
+    /// relay bridge uses this to forward live state to a paired instance
+    /// without polling.
+    var onIngest: ((CableAdvert) -> Void)?
+
     init(logger: JSONLLogger) {
         self.logger = logger
     }
@@ -30,10 +35,12 @@ final class AdvertStore {
                                         payloadHex: payloadHex)
             totalDetections += 1
 
+            let emitted: CableAdvert
             if let idx = index[id] {
                 adverts[idx].lastSeen = event.timestamp
                 adverts[idx].count += 1
                 adverts[idx].rssi = event.rssi
+                emitted = adverts[idx]
             } else {
                 let advert = CableAdvert(
                     id: id,
@@ -53,9 +60,11 @@ final class AdvertStore {
                 )
                 adverts.insert(advert, at: 0)
                 rebuildIndex()
+                emitted = advert
             }
 
             logger.append(event: event, uuid: uuid, payload: payload, variant: variant)
+            onIngest?(emitted)
         }
     }
 

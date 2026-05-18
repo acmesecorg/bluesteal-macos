@@ -1,6 +1,6 @@
 //
-//  bluemondayApp.swift
-//  bluemonday
+//  bluestealApp.swift
+//  bluesteal
 //
 //  Created by James Westgate on 18/05/2026.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct bluemondayApp: App {
+struct bluestealApp: App {
     @State private var scanner = CableScanner()
     @State private var store = AdvertStore(logger: JSONLLogger())
 

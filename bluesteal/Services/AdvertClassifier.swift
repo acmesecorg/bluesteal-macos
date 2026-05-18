@@ -1,6 +1,6 @@
 //
 //  AdvertClassifier.swift
-//  bluemonday
+//  bluesteal
 //
 
 import Foundation

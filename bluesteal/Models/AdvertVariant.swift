@@ -1,6 +1,6 @@
 //
 //  AdvertVariant.swift
-//  bluemonday
+//  bluesteal
 //
 
 import Foundation

@@ -1,6 +1,6 @@
 //
 //  AdvertRowView.swift
-//  bluemonday
+//  bluesteal
 //
 
 import SwiftUI

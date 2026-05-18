@@ -1,6 +1,6 @@
 //
 //  ScannerStatusView.swift
-//  bluemonday
+//  bluesteal
 //
 
 import SwiftUI

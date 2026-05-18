@@ -1,17 +1,17 @@
 //
 //  JSONLLogger.swift
-//  bluemonday
+//  bluesteal
 //
 
 import Foundation
 import CoreBluetooth
 
-/// Append-only JSONL writer for `~/Library/Logs/bluemonday/<yyyy-MM-dd>.jsonl`.
+/// Append-only JSONL writer for `~/Library/Logs/bluesteal/<yyyy-MM-dd>.jsonl`.
 /// One line per detection. Shape is forward-compatible with the future
 /// WebSocket relay phase — a tail-and-push loop is all that's needed.
 ///
 /// Under the app sandbox, `NSHomeDirectory()` resolves to the container
-/// `~/Library/Containers/<bundle-id>/Data`, so `Library/Logs/bluemonday`
+/// `~/Library/Containers/<bundle-id>/Data`, so `Library/Logs/bluesteal`
 /// inside there is writable without `com.apple.security.files.user-selected.*`.
 final class JSONLLogger {
     private let directory: URL
@@ -20,7 +20,7 @@ final class JSONLLogger {
 
     init() {
         self.directory = URL(fileURLWithPath: NSHomeDirectory())
-            .appendingPathComponent("Library/Logs/bluemonday", isDirectory: true)
+            .appendingPathComponent("Library/Logs/bluesteal", isDirectory: true)
         try? FileManager.default.createDirectory(at: directory,
                                                  withIntermediateDirectories: true)
 

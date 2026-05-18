@@ -12,7 +12,7 @@ import CoreBluetooth
 struct CableAdvert: Identifiable, Equatable {
     let id: String                    // "\(peripheralID)|\(payloadHex)"
     let peripheralID: UUID
-    let serviceUUID: CBUUID           // FFF9 or FDE2
+    let serviceUUID: CBUUID?          // FFF9 or FDE2; nil for manufacturer-data adverts
     let payload: Data                 // raw service-data bytes
     let variant: AdvertVariant
     let firstSeen: Date

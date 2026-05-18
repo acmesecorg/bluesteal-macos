@@ -37,14 +37,14 @@ final class JSONLLogger {
     }
 
     func append(event: RawAdvertEvent,
-                uuid: CBUUID,
+                uuid: CBUUID?,
                 payload: Data,
                 variant: AdvertVariant) {
         let record: [String: Any] = [
             "ts": dateFormatter.string(from: event.timestamp),
             "peer": event.peripheralID.uuidString,
             "rssi": event.rssi,
-            "uuid": uuid.uuidString,
+            "uuid": uuid?.uuidString as Any,
             "variant": variant.wireName,
             "payloadHex": payload.hexEncoded,
             "name": event.localName as Any,

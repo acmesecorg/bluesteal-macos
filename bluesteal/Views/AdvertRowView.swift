@@ -40,7 +40,9 @@ struct AdvertRowView: View {
         DisclosureGroup(isExpanded: $expanded) {
             VStack(alignment: .leading, spacing: 4) {
                 detailRow("Peripheral", advert.peripheralID.uuidString)
-                detailRow("UUID", advert.serviceUUID.uuidString)
+                if let uuid = advert.serviceUUID {
+                    detailRow("UUID", uuid.uuidString)
+                }
                 detailRow("Payload (\(advert.payload.count) B)", advert.payloadHex)
                 if let name = advert.localName {
                     detailRow("Local Name", name)
@@ -108,6 +110,7 @@ struct AdvertRowView: View {
             case .fidoV2: return .blue
             case .googleV1: return .purple
             case .googleV2: return .indigo
+            case .googleMfgV1: return .pink
             case .unknown: return .orange
             }
         }()

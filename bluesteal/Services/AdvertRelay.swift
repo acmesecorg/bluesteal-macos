@@ -95,7 +95,7 @@ extension CableAdvert {
     nonisolated init?(wire: RelayMessage.Advert) {
         guard let peripheralID = UUID(uuidString: wire.peripheralID),
               let payload = Data(hex: wire.payloadHex) else { return nil }
-        let serviceUUID = CBUUID(string: wire.serviceUUID)
+        let serviceUUID = wire.serviceUUID.map { CBUUID(string: $0) }
         let variant = AdvertVariant(wireName: wire.variant)
         let manufacturerData = wire.manufacturerHex.flatMap(Data.init(hex:))
         let advertisedServiceUUIDs = (wire.advertisedServiceUUIDs ?? []).map { CBUUID(string: $0) }
@@ -121,10 +121,11 @@ extension CableAdvert {
 extension AdvertVariant {
     nonisolated init(wireName: String) {
         switch wireName {
-        case "fidoV2":   self = .fidoV2
-        case "googleV1": self = .googleV1
-        case "googleV2": self = .googleV2
-        default:         self = .unknown(reason: wireName)
+        case "fidoV2":      self = .fidoV2
+        case "googleV1":    self = .googleV1
+        case "googleV2":    self = .googleV2
+        case "googleMfgV1": self = .googleMfgV1
+        default:            self = .unknown(reason: wireName)
         }
     }
 }

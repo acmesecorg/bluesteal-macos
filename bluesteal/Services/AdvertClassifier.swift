@@ -39,4 +39,24 @@ nonisolated enum AdvertClassifier {
         }
         return .unknown(reason: "non-cable uuid \(uuid.uuidString)")
     }
+
+    /// Recognise Google's manufacturer-data caBLE v1 advert. CoreBluetooth
+    /// surfaces the raw blob with a two-byte little-endian company ID prefix:
+    ///
+    ///   [00 E0] [14 15 20 01] [16-byte EID]
+    ///    co.id   len  ty  fl  ver
+    ///
+    /// Returns the variant + extracted EID if the shape matches; nil otherwise.
+    static func classifyManufacturerData(_ data: Data) -> (variant: AdvertVariant, eid: Data)? {
+        guard data.count == 22 else { return nil }
+        let s = data.startIndex
+        let companyId = UInt16(data[s]) | (UInt16(data[s + 1]) << 8)
+        guard companyId == 0x00E0 else { return nil }
+        guard data[s + 2] == 20,
+              data[s + 3] == 0x15,
+              data[s + 4] == 0x20,
+              data[s + 5] == 0x01 else { return nil }
+        let eid = Data(data[(s + 6)..<(s + 22)])
+        return (.googleMfgV1, eid)
+    }
 }

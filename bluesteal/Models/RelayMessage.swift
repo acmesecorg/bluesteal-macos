@@ -17,7 +17,7 @@ enum RelayMessage: Codable, Equatable {
         var id: String
         var ts: Date
         var peripheralID: String          // UUID string
-        var serviceUUID: String           // "FFF9" or "FDE2"
+        var serviceUUID: String?          // "FFF9" or "FDE2"; nil for mfg-data adverts
         var payloadHex: String
         var variant: String               // AdvertVariant.wireName
         var rssi: Int
@@ -71,7 +71,7 @@ extension RelayMessage.Advert {
         self.id = advert.id
         self.ts = advert.lastSeen
         self.peripheralID = advert.peripheralID.uuidString
-        self.serviceUUID = advert.serviceUUID.uuidString
+        self.serviceUUID = advert.serviceUUID?.uuidString
         self.payloadHex = advert.payloadHex
         self.variant = advert.variant.wireName
         self.rssi = advert.rssi

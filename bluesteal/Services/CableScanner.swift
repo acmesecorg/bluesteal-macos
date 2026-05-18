@@ -93,13 +93,14 @@ final class CableScanner: NSObject, CBCentralManagerDelegate {
                         rssi RSSI: NSNumber) {
         let serviceData = (advertisementData[CBAdvertisementDataServiceDataKey]
                            as? [CBUUID: Data]) ?? [:]
+        let manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data
 
-        // Only forward adverts that carry caBLE service data. In promiscuous
-        // mode this drops everything else; in filtered mode the central will
-        // already have pre-filtered by service UUID but we still need service
-        // data to do anything useful with it.
-        let hasCableData = serviceData.keys.contains(where: AdvertClassifier.isCableUUID)
-        guard hasCableData else { return }
+        // Forward adverts carrying caBLE service data (FFF9 / FDE2) OR a
+        // Google manufacturer-data v1 caBLE blob (company ID 0x00E0). Either
+        // gate is enough; the store routes each path independently.
+        let hasCableServiceData = serviceData.keys.contains(where: AdvertClassifier.isCableUUID)
+        let hasCableMfgData = manufacturerData.flatMap(AdvertClassifier.classifyManufacturerData) != nil
+        guard hasCableServiceData || hasCableMfgData else { return }
 
         let event = RawAdvertEvent(
             timestamp: Date(),
@@ -108,7 +109,7 @@ final class CableScanner: NSObject, CBCentralManagerDelegate {
             advertisedServiceUUIDs: (advertisementData[CBAdvertisementDataServiceUUIDsKey]
                                      as? [CBUUID]) ?? [],
             localName: advertisementData[CBAdvertisementDataLocalNameKey] as? String,
-            manufacturerData: advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data,
+            manufacturerData: manufacturerData,
             txPowerLevel: (advertisementData[CBAdvertisementDataTxPowerLevelKey] as? NSNumber)?.intValue,
             isConnectable: (advertisementData[CBAdvertisementDataIsConnectable] as? NSNumber)?.boolValue,
             rssi: RSSI.intValue

@@ -19,6 +19,10 @@ enum AdvertVariant: Equatable, Hashable {
     case googleV1
     /// Google caBLE v2: UUID `0xFDE2`, 20-byte payload (same shape as fidoV2).
     case googleV2
+    /// Google caBLE v1 carried as manufacturer data: company ID `0x00E0`,
+    /// header `[length=20, type=0x15, flags=0x20, version=0x01]`, 16-byte EID.
+    /// Observed on the Windows-publisher branch of Chromium's hybrid flow.
+    case googleMfgV1
     /// Service data present under a caBLE UUID but doesn't match a known shape.
     case unknown(reason: String)
 
@@ -27,6 +31,7 @@ enum AdvertVariant: Equatable, Hashable {
         case .fidoV2: return "FIDO-v2"
         case .googleV1: return "Google-v1"
         case .googleV2: return "Google-v2"
+        case .googleMfgV1: return "Google-Mfg"
         case .unknown: return "?"
         }
     }
@@ -37,6 +42,7 @@ enum AdvertVariant: Equatable, Hashable {
         case .fidoV2: return "fidoV2"
         case .googleV1: return "googleV1"
         case .googleV2: return "googleV2"
+        case .googleMfgV1: return "googleMfgV1"
         case .unknown(let reason): return "unknown(\(reason))"
         }
     }

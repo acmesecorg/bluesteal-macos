@@ -10,9 +10,17 @@ struct ContentView: View {
     @Environment(AdvertStore.self) private var store
     @Environment(RelayClient.self) private var relay
     @Environment(AdvertRelay.self) private var advertRelay
+    @Environment(DuplicatePayloadDetector.self) private var duplicateDetector
 
     var body: some View {
         VStack(spacing: 0) {
+            if duplicateDetector.isWarningVisible {
+                DuplicateWarningBanner(
+                    onDismiss: { duplicateDetector.dismissWarning() }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
             ScannerStatusView(
                 state: scanner.state,
                 isScanning: scanner.isScanning,
@@ -57,16 +65,57 @@ struct ContentView: View {
                 store.ingest(event)
             }
         }
+        .animation(.easeInOut(duration: 0.2), value: duplicateDetector.isWarningVisible)
         .frame(minWidth: 820, minHeight: 480)
+    }
+}
+
+/// Warning banner shown when host and peer have both observed an advert
+/// with the same payload bytes. Wording matches the Windows `<InfoBar>`
+/// verbatim — the two clients are expected to look and read the same.
+private struct DuplicateWarningBanner: View {
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+                .imageScale(.large)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Host and peer are seeing the same advert")
+                    .font(.subheadline.weight(.semibold))
+                Text("Bluesteal works best when host and peer are not within range of the same Bluetooth device for the CTAP hybrid flow.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .imageScale(.small)
+            }
+            .buttonStyle(.borderless)
+            .help("Dismiss")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.18))
+        .overlay(alignment: .bottom) { Divider() }
     }
 }
 
 #Preview {
     let store = AdvertStore(logger: JSONLLogger())
     let relay = RelayClient(tracer: RelayTracer())
+    let advertRelay = AdvertRelay(store: store, relay: relay)
     return ContentView()
         .environment(CableScanner(previewMode: true))
         .environment(store)
         .environment(relay)
-        .environment(AdvertRelay(store: store, relay: relay))
+        .environment(advertRelay)
+        .environment(DuplicatePayloadDetector(store: store, relay: advertRelay))
 }

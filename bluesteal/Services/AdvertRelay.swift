@@ -29,6 +29,18 @@ final class AdvertRelay {
 
     private var heartbeatTask: Task<Void, Never>?
 
+    /// Called for every local advert just before it's sent to the peer.
+    /// Mirrors Windows's `AdvertStore.OnIngest` subscription path —
+    /// secondary observers (e.g. `DuplicatePayloadDetector`) hang off this
+    /// rather than `AdvertStore.onIngest` because that property only
+    /// supports a single subscriber on the Swift side.
+    var onLocalIngest: ((CableAdvert) -> Void)?
+
+    /// Called for every advert received from the peer after the inbound
+    /// list mutates — both new inserts and updates. Mirrors Windows's
+    /// `AdvertRelay.OnReceived` event.
+    var onReceived: ((CableAdvert) -> Void)?
+
     init(store: AdvertStore, relay: RelayClient) {
         self.store = store
         self.relay = relay
@@ -36,9 +48,12 @@ final class AdvertRelay {
     }
 
     private func wireUp() {
-        // Outbound: anything our scanner sees, forward to the peer.
+        // Outbound: anything our scanner sees, forward to the peer (and to
+        // any local observers — the duplicate-payload detector hooks here).
         store.onIngest = { [weak self] advert in
-            self?.relay.send(.advert(.init(from: advert)))
+            guard let self else { return }
+            self.relay.send(.advert(.init(from: advert)))
+            self.onLocalIngest?(advert)
         }
         // Inbound: anything the peer sends us, mirror into the received list.
         relay.onMessage = { [weak self] message in
@@ -75,6 +90,10 @@ final class AdvertRelay {
                 received.insert(advert, at: 0)
                 rebuildReceivedIndex()
             }
+            // Notify on both insert and update paths — the duplicate-payload
+            // detector wants to see every received advert event, not just
+            // first observations.
+            onReceived?(advert)
         case .heartbeat(let h):
             lastHostHeartbeat = h.ts
         case .bye:

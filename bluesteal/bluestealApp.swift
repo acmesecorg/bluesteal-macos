@@ -13,6 +13,7 @@ struct bluestealApp: App {
     @State private var store: AdvertStore
     @State private var relay: RelayClient
     @State private var advertRelay: AdvertRelay
+    @State private var duplicateDetector: DuplicatePayloadDetector
 
     init() {
         let tracer = RelayTracer()
@@ -27,10 +28,12 @@ struct bluestealApp: App {
         let store = AdvertStore(logger: JSONLLogger())
         let relay = RelayClient(tracer: tracer)
         let advertRelay = AdvertRelay(store: store, relay: relay)
+        let detector = DuplicatePayloadDetector(store: store, relay: advertRelay)
         _scanner = State(initialValue: scanner)
         _store = State(initialValue: store)
         _relay = State(initialValue: relay)
         _advertRelay = State(initialValue: advertRelay)
+        _duplicateDetector = State(initialValue: detector)
     }
 
     var body: some Scene {
@@ -40,6 +43,7 @@ struct bluestealApp: App {
                 .environment(store)
                 .environment(relay)
                 .environment(advertRelay)
+                .environment(duplicateDetector)
         }
     }
 }

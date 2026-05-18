@@ -1,0 +1,74 @@
+//
+//  AdvertStore.swift
+//  bluemonday
+//
+
+import Foundation
+import CoreBluetooth
+import Observation
+
+/// Aggregates raw scanner events into a deduped, ordered list of `CableAdvert`s
+/// and appends every detection to the JSONL log.
+@Observable
+final class AdvertStore {
+    private(set) var adverts: [CableAdvert] = []
+    private(set) var totalDetections: Int = 0
+    private var index: [String: Int] = [:]   // CableAdvert.id -> array index
+
+    private let logger: JSONLLogger
+
+    init(logger: JSONLLogger) {
+        self.logger = logger
+    }
+
+    func ingest(_ event: RawAdvertEvent) {
+        // A single advert can carry service data under both caBLE UUIDs; emit one row each.
+        for (uuid, payload) in event.serviceData where AdvertClassifier.isCableUUID(uuid) {
+            let variant = AdvertClassifier.classify(uuid: uuid, payload: payload)
+            let payloadHex = payload.hexEncoded
+            let id = CableAdvert.makeID(peripheralID: event.peripheralID,
+                                        payloadHex: payloadHex)
+            totalDetections += 1
+
+            if let idx = index[id] {
+                adverts[idx].lastSeen = event.timestamp
+                adverts[idx].count += 1
+                adverts[idx].rssi = event.rssi
+            } else {
+                let advert = CableAdvert(
+                    id: id,
+                    peripheralID: event.peripheralID,
+                    serviceUUID: uuid,
+                    payload: payload,
+                    variant: variant,
+                    firstSeen: event.timestamp,
+                    lastSeen: event.timestamp,
+                    count: 1,
+                    rssi: event.rssi,
+                    localName: event.localName,
+                    advertisedServiceUUIDs: event.advertisedServiceUUIDs,
+                    manufacturerData: event.manufacturerData,
+                    txPowerLevel: event.txPowerLevel,
+                    isConnectable: event.isConnectable
+                )
+                adverts.insert(advert, at: 0)
+                rebuildIndex()
+            }
+
+            logger.append(event: event, uuid: uuid, payload: payload, variant: variant)
+        }
+    }
+
+    func clear() {
+        adverts.removeAll()
+        index.removeAll()
+        totalDetections = 0
+    }
+
+    private func rebuildIndex() {
+        index.removeAll(keepingCapacity: true)
+        for (i, a) in adverts.enumerated() {
+            index[a.id] = i
+        }
+    }
+}

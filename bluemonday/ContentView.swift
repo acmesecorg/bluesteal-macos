@@ -2,23 +2,52 @@
 //  ContentView.swift
 //  bluemonday
 //
-//  Created by James Westgate on 18/05/2026.
-//
 
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(CableScanner.self) private var scanner
+    @Environment(AdvertStore.self) private var store
+
     var body: some View {
-        VStack {
-            Image(systemName: "globe")
-                .imageScale(.large)
-                .foregroundStyle(.tint)
-            Text("Hello, world!")
+        VStack(spacing: 0) {
+            ScannerStatusView(
+                state: scanner.state,
+                isScanning: scanner.isScanning,
+                totalDetections: store.totalDetections,
+                uniqueCount: store.adverts.count,
+                mode: Binding(get: { scanner.mode }, set: { scanner.mode = $0 }),
+                onClear: { store.clear() }
+            )
+
+            Divider()
+
+            if store.adverts.isEmpty {
+                ContentUnavailableView {
+                    Label("Waiting for caBLE adverts", systemImage: "antenna.radiowaves.left.and.right")
+                } description: {
+                    Text("Listening for service data under UUIDs 0xFFF9 (FIDO) and 0xFDE2 (Google).\nStart a hybrid sign-in flow on a nearby phone or laptop.")
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(store.adverts) { advert in
+                    AdvertRowView(advert: advert)
+                }
+                .listStyle(.inset)
+            }
         }
-        .padding()
+        .onAppear {
+            scanner.onEvent = { event in
+                store.ingest(event)
+            }
+        }
+        .frame(minWidth: 820, minHeight: 480)
     }
 }
 
 #Preview {
     ContentView()
+        .environment(CableScanner(previewMode: true))
+        .environment(AdvertStore(logger: JSONLLogger()))
 }

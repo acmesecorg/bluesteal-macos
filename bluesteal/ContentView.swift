@@ -45,7 +45,7 @@ struct ContentView: View {
                     }
                     if !advertRelay.received.isEmpty {
                         Section("From peer") {
-                            ForEach(advertRelay.received) { AdvertRowView(advert: $0) }
+                            ForEach(advertRelay.received) { AdvertRowView(advert: $0, source: .relay) }
                         }
                     }
                 }

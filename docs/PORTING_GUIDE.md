@@ -13,7 +13,7 @@ will hit that same bug.
 
 ## 1. The protocol in 30 seconds
 
-Two clients pair using an 8-character code typed by the user. Pairing is a
+Two clients pair using a 5-letter code typed by the user. Pairing is a
 ~5-second WebRTC SDP/ICE handshake brokered over a public MQTT-over-WSS
 broker; once the data channel opens, the MQTT signaling drops and adverts
 flow over the direct WebRTC `RTCDataChannel`.
@@ -74,8 +74,21 @@ on the list and its order being identical on every platform.
 
 ### Starting broker — FNV-1a hash of the pairing code
 
-Both Host and Peer compute the same starting index by hashing the 8-char
-pairing code. The two sides start on the same broker.
+Both Host and Peer compute the same starting index by hashing the pairing
+code. The two sides start on the same broker.
+
+### Pairing code format
+
+| Field | Value |
+|---|---|
+| Length | **5** characters |
+| Alphabet | `ABCDEFGHJKMNPQRSTUVWXYZ` (23 uppercase letters; `I`, `L`, `O` removed) |
+| Casing | Always uppercase on the wire; UI should `uppercase()` user input |
+
+The alphabet and length **must match every other platform exactly** —
+both sides hash the code to select the starting broker, and a mismatch
+(one side digits-included, the other letters-only) means they pick
+different brokers and never meet.
 
 ```
 hash = 0x811C9DC5            # FNV-1a 32-bit offset basis
@@ -84,18 +97,18 @@ for each byte in code.utf8:
 return hash mod len(brokers)
 ```
 
-ASCII-only pairing codes (alphabet `ABCDEFGHJKMNPQRSTUVWXYZ23456789`) mean
-the UTF-8 bytes are the raw ASCII values; results are deterministic across
-all platforms.
+ASCII-only pairing codes mean the UTF-8 bytes are the raw ASCII values;
+results are deterministic across all platforms.
 
 Reference test vectors (use these to validate your implementation):
 
-| code       | hash (hex)   | index |
-|------------|--------------|-------|
-| `EVE2NS6X` | `0x9d737a88` | 2 |
-| `R8V8XZ69` | (compute it) | 2 |
-| `KVANTSMC` | (compute it) | 1 |
-| `PUEW9GG7` | (compute it) | 0 |
+| code    | hash (hex)   | index (mod 3) |
+|---------|--------------|---------------|
+| `ABCDE` | `0x041153a8` | 2 |
+| `QWERT` | `0xe4e8af3a` | 0 |
+| `ZZZZZ` | `0x82941d6d` | 2 |
+| `BNJPS` | `0xbcdf3d30` | 1 |
+| `KMHRX` | `0x37693d25` | 0 |
 
 If your implementation produces a different index for any of these, you've
 diverged — find the bug before going further.

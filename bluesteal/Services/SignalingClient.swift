@@ -36,10 +36,22 @@ final class SignalingClient {
         static let fallbacks: [Broker] = [hiveMQ, emqx, mosquitto]
     }
 
-    /// 8 chars from an unambiguous alphabet (≈210B combinations).
+    /// Alphabet used for pairing codes — uppercase letters with the ambiguous
+    /// I, L, O removed. **Must match Windows `SignalingClient.cs` exactly**:
+    /// the FNV-1a hash of the code drives the starting-broker selection on
+    /// both sides, so any divergence (length, alphabet, casing) breaks
+    /// cross-platform pairing.
+    static let codeAlphabet = Array("ABCDEFGHJKMNPQRSTUVWXYZ")
+
+    /// Length of a generated pairing code. 5 letters from a 23-letter
+    /// alphabet ≈ 6.4 M combinations — plenty for a short-lived MQTT topic.
+    static let codeLength = 5
+
+    /// Generate a fresh pairing code. The code lives only as long as the
+    /// broker session and is human-typed across devices, so we favour
+    /// ease-of-typing over entropy.
     static func makeCode() -> String {
-        let alphabet = Array("ABCDEFGHJKMNPQRSTUVWXYZ23456789")
-        return String((0..<8).map { _ in alphabet.randomElement()! })
+        String((0..<codeLength).map { _ in codeAlphabet.randomElement()! })
     }
 
     static func topicRoot(for code: String) -> String { "bluesteal/v1/\(code)" }

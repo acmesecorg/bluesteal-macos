@@ -64,14 +64,14 @@ struct RelayView: View {
                 .controlSize(.small)
 
             if showJoinField {
-                TextField("8-char code", text: $joinCode)
+                TextField("\(SignalingClient.codeLength)-letter code", text: $joinCode)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 130)
+                    .frame(width: 110)
                     .font(.system(.body, design: .monospaced))
                     .onSubmit { submitJoin() }
                 Button("Connect", action: submitJoin)
                     .controlSize(.small)
-                    .disabled(joinCode.count != 8)
+                    .disabled(normalisedJoinCode.count != SignalingClient.codeLength)
                 Button("Cancel") { showJoinField = false; joinCode = "" }
                     .controlSize(.small)
                     .buttonStyle(.borderless)
@@ -149,10 +149,19 @@ struct RelayView: View {
         }
     }
 
+    /// Uppercased + filtered to the alphabet — strips spaces, ambiguous
+    /// I/L/O, and any digits the user might paste from a stale code. The
+    /// "Connect" button gates on this length, not the raw input length.
+    private var normalisedJoinCode: String {
+        let allowed = Set(SignalingClient.codeAlphabet)
+        return joinCode.uppercased().filter { allowed.contains($0) }
+    }
+
     private func submitJoin() {
-        let code = joinCode.uppercased().filter { $0.isLetter || $0.isNumber }
-        guard code.count == 8 else { return }
+        let code = normalisedJoinCode
+        guard code.count == SignalingClient.codeLength else { return }
         relay.join(code: code)
         showJoinField = false
+        joinCode = ""
     }
 }

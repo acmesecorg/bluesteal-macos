@@ -1,5 +1,20 @@
 ﻿# Re-broadcast Peer Adverts — macOS Implementation Plan
 
+> **Empirical update (2026-05-19):** A diagnostic capture of a native iOS
+> authenticator confirmed it emits `ServiceData.FFF9` with a 20-byte payload
+> (16-byte encrypted EID + 4-byte HMAC tag) — *not* the EID-as-128-bit-UUID
+> encoding. See `IOS_AUTHENTICATOR_CAPTURE.md`. Implications:
+>
+> - The universally-working topology is **iOS authenticator → any Host →
+>   Windows Receiver → any Chromium** (Windows re-emits the original service-
+>   data with HMAC tag intact).
+> - **macOS/iOS Receivers cannot re-broadcast faithfully** — they can only
+>   emit `kCBAdvertisementDataServiceUUIDsKey`, which drops the HMAC tag and
+>   is only consumed by Chromium-macOS's `IS_MAC` UUID trial-decrypt path.
+> - `MACOS_UPDATES.md §5` (EID-as-UUID detection) is *not* required to detect
+>   iOS-native authenticators. It would still be needed to detect Chromium-on-
+>   macOS *acting as* an authenticator.
+
 This document describes the changes needed in luesteal-macos to re-broadcast peer-received BLE advertisements on the local Bluetooth peripheral, mirroring the Windows implementation in luesteal-windows.
 
 ---

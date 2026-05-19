@@ -25,6 +25,7 @@ struct bluestealApp: App {
         ])
 
         let scanner = CableScanner()
+        scanner.diagnosticLogger = DiagnosticLogger()
         let store = AdvertStore(logger: JSONLLogger())
         let relay = RelayClient(tracer: tracer)
         let advertRelay = AdvertRelay(store: store, relay: relay)

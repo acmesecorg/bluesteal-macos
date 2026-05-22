@@ -35,6 +35,10 @@ final class RelayClient {
     /// Inbound application messages (non-bye). Set by `AdvertRelay`.
     var onMessage: ((RelayMessage) -> Void)?
 
+    /// Fires on every distinct `state` transition. Set by `AdvertRelay` to
+    /// drive the heartbeat loop (start on `.open`, stop on anything else).
+    var onStateChange: ((State) -> Void)?
+
     // MARK: - WebRTC plumbing
 
     private static let factory: RTCPeerConnectionFactory = {
@@ -508,6 +512,7 @@ final class RelayClient {
         guard old != new else { return }
         tracer.log("state", "state.change",
                    ["from": Self.stateLabel(old), "to": Self.stateLabel(new)])
+        onStateChange?(new)
     }
 
     private var stateDescription: String { Self.stateLabel(state) }

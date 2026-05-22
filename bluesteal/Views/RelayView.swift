@@ -110,6 +110,10 @@ struct RelayView: View {
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+            Text("hbt \(relay.heartbeatCount)")
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
             if relay.isUsingTURN {
                 Text("TURN").font(.caption2.weight(.semibold))
                     .padding(.horizontal, 5).padding(.vertical, 1)

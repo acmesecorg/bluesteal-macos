@@ -223,6 +223,16 @@ final class RelayClient {
                                                       delegate: delegateProxy)
     }
 
+    /// ICE servers. STUN-only is fine for same-LAN pairings; TURN is the
+    /// fallback when ICE can't form a host/srflx pair — cross-AP via a WiFi
+    /// extender, cellular ↔ home, NATs without hairpinning, etc.
+    ///
+    /// Cloudflare Realtime TURN URLs include both UDP and TCP variants plus a
+    /// TLS-wrapped `turns:` line. The TLS form is the one that survives the
+    /// most hostile networks (corporate guest WiFi, mobile carriers that block
+    /// UDP). Credentials live in `Secrets.swift` — see the root README for how
+    /// to mint them. Empty credentials are tolerated; libwebrtc skips the TURN
+    /// entries and falls back to STUN.
     private static func defaultIceServers() -> [RTCIceServer] {
         return [
             RTCIceServer(urlStrings: [
@@ -230,12 +240,13 @@ final class RelayClient {
                 "stun:stun1.l.google.com:19302",
                 "stun:stun.cloudflare.com:3478"
             ]),
-            RTCIceServer(urlStrings: ["turn:openrelay.metered.ca:80"],
-                         username: "openrelayproject",
-                         credential: "openrelayproject"),
-            RTCIceServer(urlStrings: ["turn:openrelay.metered.ca:443"],
-                         username: "openrelayproject",
-                         credential: "openrelayproject")
+            RTCIceServer(urlStrings: [
+                "turn:turn.cloudflare.com:3478?transport=udp",
+                "turn:turn.cloudflare.com:3478?transport=tcp",
+                "turns:turn.cloudflare.com:5349?transport=tcp"
+            ],
+            username: Secrets.turnUsername,
+            credential: Secrets.turnCredential)
         ]
     }
 

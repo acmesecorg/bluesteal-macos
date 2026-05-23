@@ -13,7 +13,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		BDDBD8812FBAFF0000DDE102 /* bluesteal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = bluesteal.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BDDBD8812FBAFF0000DDE102 /* bluesteal.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; name = bluesteal.app; path = Bluesteal.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */

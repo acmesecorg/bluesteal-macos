@@ -30,10 +30,19 @@ final class RelayClient {
     }
     private(set) var messagesSent = 0
     private(set) var messagesReceived = 0
+    /// Tally of heartbeats on the data channel in either direction.
+    /// Surfaces in the UI alongside `sent`/`recv` so a session that is
+    /// otherwise silent (no adverts flowing) still visibly ticks every
+    /// ~2 s — confirms the socket is alive end-to-end.
+    private(set) var heartbeatCount = 0
     private(set) var isUsingTURN = false
 
     /// Inbound application messages (non-bye). Set by `AdvertRelay`.
     var onMessage: ((RelayMessage) -> Void)?
+
+    /// Fires on every distinct `state` transition. Set by `AdvertRelay` to
+    /// drive the heartbeat loop (start on `.open`, stop on anything else).
+    var onStateChange: ((State) -> Void)?
 
     // MARK: - WebRTC plumbing
 
@@ -151,6 +160,7 @@ final class RelayClient {
         dataChannel.sendData(buffer)
         tracer.log("dc", "dc.send", ["type": typeName, "payloadBytes": data.count])
         if case .advert = message { messagesSent += 1 }
+        if case .heartbeat = message { heartbeatCount += 1 }
     }
 
     // MARK: - Setup
@@ -495,6 +505,7 @@ final class RelayClient {
             return
         }
         if case .advert = message { messagesReceived += 1 }
+        if case .heartbeat = message { heartbeatCount += 1 }
         if case .bye(let reason) = message {
             disconnect(reason: "peer: \(reason)")
             return
@@ -508,6 +519,7 @@ final class RelayClient {
         guard old != new else { return }
         tracer.log("state", "state.change",
                    ["from": Self.stateLabel(old), "to": Self.stateLabel(new)])
+        onStateChange?(new)
     }
 
     private var stateDescription: String { Self.stateLabel(state) }

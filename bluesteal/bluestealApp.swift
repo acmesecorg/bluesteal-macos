@@ -14,6 +14,8 @@ struct bluestealApp: App {
     @State private var relay: RelayClient
     @State private var advertRelay: AdvertRelay
     @State private var duplicateDetector: DuplicatePayloadDetector
+    @State private var bleAdvertiser: BleAdvertiser
+    @State private var rebroadcast: RebroadcastService
 
     init() {
         let tracer = RelayTracer()
@@ -25,15 +27,30 @@ struct bluestealApp: App {
         ])
 
         let scanner = CableScanner()
+        scanner.diagnosticLogger = DiagnosticLogger()
         let store = AdvertStore(logger: JSONLLogger())
         let relay = RelayClient(tracer: tracer)
         let advertRelay = AdvertRelay(store: store, relay: relay)
         let detector = DuplicatePayloadDetector(store: store, relay: advertRelay)
+        let advertiser = BleAdvertiser(tracer: tracer)
+        let rebroadcast = RebroadcastService(advertRelay: advertRelay,
+                                              advertiser: advertiser,
+                                              relay: relay,
+                                              tracer: tracer)
+        // Loop-guard: AdvertStore must drop scanner events that match a
+        // payload we're currently re-broadcasting ourselves, otherwise the
+        // local scanner would re-ingest its own emission and forward it
+        // back to the peer.
+        store.selfPayloadFilter = { [weak rebroadcast] hex in
+            rebroadcast?.isSelfPublished(payloadHex: hex) ?? false
+        }
         _scanner = State(initialValue: scanner)
         _store = State(initialValue: store)
         _relay = State(initialValue: relay)
         _advertRelay = State(initialValue: advertRelay)
         _duplicateDetector = State(initialValue: detector)
+        _bleAdvertiser = State(initialValue: advertiser)
+        _rebroadcast = State(initialValue: rebroadcast)
     }
 
     var body: some Scene {
@@ -44,6 +61,8 @@ struct bluestealApp: App {
                 .environment(relay)
                 .environment(advertRelay)
                 .environment(duplicateDetector)
+                .environment(bleAdvertiser)
+                .environment(rebroadcast)
         }
     }
 }

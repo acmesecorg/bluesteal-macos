@@ -25,12 +25,18 @@ struct RawAdvertEvent {
 enum ScanMode: String, CaseIterable, Identifiable {
     case promiscuous   // serviceUUIDs: nil — catches every variant
     case filtered      // serviceUUIDs: [FFF9, FDE2] — lower CPU
+    /// Promiscuous + dump every advert's full `advertisementData` dictionary
+    /// to a separate JSONL for offline inspection. Used to characterise the
+    /// wire format of external authenticators (e.g. native iOS) — see
+    /// `docs/IOS_AUTHENTICATOR_CAPTURE.md`.
+    case diagnostic
 
     var id: String { rawValue }
     var label: String {
         switch self {
         case .promiscuous: return "Promiscuous"
         case .filtered: return "Filtered (FFF9/FDE2)"
+        case .diagnostic: return "Diagnostic"
         }
     }
 }
@@ -47,6 +53,11 @@ final class CableScanner: NSObject, CBCentralManagerDelegate {
 
     var onEvent: ((RawAdvertEvent) -> Void)?
 
+    /// Optional sink for the Diagnostic mode. When non-nil and `mode ==
+    /// .diagnostic`, every advert (caBLE-matching or not) is dumped via this
+    /// logger. Injected from the app shell.
+    var diagnosticLogger: DiagnosticLogger?
+
     private var central: CBCentralManager!
 
     init(previewMode: Bool = false) {
@@ -58,6 +69,9 @@ final class CableScanner: NSObject, CBCentralManagerDelegate {
 
     func start() {
         guard state == .poweredOn else { return }
+        // Filtered mode narrows the OS-level service-UUID filter; promiscuous
+        // and diagnostic both scan with no filter so 128-bit UUIDs and
+        // manufacturer-data adverts are all visible.
         let services: [CBUUID]? = (mode == .filtered) ? AdvertClassifier.cableUUIDs : nil
         let options: [String: Any] = [
             CBCentralManagerScanOptionAllowDuplicatesKey: true
@@ -91,6 +105,16 @@ final class CableScanner: NSObject, CBCentralManagerDelegate {
                         didDiscover peripheral: CBPeripheral,
                         advertisementData: [String: Any],
                         rssi RSSI: NSNumber) {
+        // Diagnostic mode: dump *every* advert before the cable filter, so
+        // we can identify non-cable encodings (e.g. EID-as-128-bit-UUID from
+        // a native iOS authenticator) that the normal pipeline would drop.
+        // The dedicated logger handles dedup so the file stays readable.
+        if mode == .diagnostic {
+            diagnosticLogger?.log(peripheralID: peripheral.identifier,
+                                  rssi: RSSI.intValue,
+                                  advertisementData: advertisementData)
+        }
+
         let serviceData = (advertisementData[CBAdvertisementDataServiceDataKey]
                            as? [CBUUID: Data]) ?? [:]
         let manufacturerData = advertisementData[CBAdvertisementDataManufacturerDataKey] as? Data

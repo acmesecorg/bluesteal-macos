@@ -9,6 +9,7 @@ import AppKit
 struct RelayView: View {
     @Environment(RelayClient.self) private var relay
     @Environment(AdvertRelay.self) private var advertRelay
+    @Environment(RebroadcastService.self) private var rebroadcast
 
     @State private var joinCode: String = ""
     @State private var showJoinField: Bool = false
@@ -109,6 +110,10 @@ struct RelayView: View {
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+            Text("hbt \(relay.heartbeatCount)")
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
             if relay.isUsingTURN {
                 Text("TURN").font(.caption2.weight(.semibold))
                     .padding(.horizontal, 5).padding(.vertical, 1)
@@ -116,9 +121,27 @@ struct RelayView: View {
                     .foregroundStyle(.orange)
                     .clipShape(Capsule())
             }
+            rebroadcastChip
             Button("Disconnect") { relay.disconnect() }
                 .controlSize(.small)
         }
+    }
+
+    private var rebroadcastChip: some View {
+        let hasError = rebroadcast.lastError != nil
+        let color: Color = hasError ? .red : (rebroadcast.isActive ? .green : .secondary)
+        let label: String = {
+            if let err = rebroadcast.lastError { return "Rebroadcast: \(err)" }
+            return "Rebroadcasting \(rebroadcast.activeCount)"
+        }()
+        return Text(label)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(color.opacity(0.18))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
+            .help(hasError ? "BLE peripheral error" : "Adverts re-broadcast over local BLE")
     }
 
     // MARK: - Helpers

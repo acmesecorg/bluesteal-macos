@@ -4,6 +4,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct ContentView: View {
     @Environment(CableScanner.self) private var scanner
@@ -19,6 +20,10 @@ struct ContentView: View {
                     onDismiss: { duplicateDetector.dismissWarning() }
                 )
                 .transition(.move(edge: .top).combined(with: .opacity))
+            }
+
+            if scanner.mode == .diagnostic {
+                DiagnosticModeBanner()
             }
 
             ScannerStatusView(
@@ -108,14 +113,58 @@ private struct DuplicateWarningBanner: View {
     }
 }
 
+/// Instructional banner shown while in Diagnostic scan mode. Reminds the
+/// user where the dump file lives and what they should be doing on the
+/// iOS authenticator while the capture runs.
+private struct DiagnosticModeBanner: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "magnifyingglass.circle.fill")
+                .foregroundStyle(.blue)
+                .imageScale(.large)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Diagnostic capture active")
+                    .font(.subheadline.weight(.semibold))
+                Text("Every nearby BLE advert is being dumped to ~/Library/Logs/bluesteal/diag-*.jsonl. Trigger a hybrid sign-in on the iOS device under test, then switch back to Promiscuous and grep the diag log for the new advert.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 8)
+
+            Button("Reveal log") {
+                let dir = URL(fileURLWithPath: NSHomeDirectory())
+                    .appendingPathComponent("Library/Logs/bluesteal", isDirectory: true)
+                NSWorkspace.shared.open(dir)
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.blue.opacity(0.12))
+        .overlay(alignment: .bottom) { Divider() }
+    }
+}
+
 #Preview {
+    let tracer = RelayTracer()
     let store = AdvertStore(logger: JSONLLogger())
-    let relay = RelayClient(tracer: RelayTracer())
+    let relay = RelayClient(tracer: tracer)
     let advertRelay = AdvertRelay(store: store, relay: relay)
+    let advertiser = BleAdvertiser(tracer: tracer)
+    let rebroadcast = RebroadcastService(advertRelay: advertRelay,
+                                          advertiser: advertiser,
+                                          relay: relay,
+                                          tracer: tracer)
     return ContentView()
         .environment(CableScanner(previewMode: true))
         .environment(store)
         .environment(relay)
         .environment(advertRelay)
         .environment(DuplicatePayloadDetector(store: store, relay: advertRelay))
+        .environment(advertiser)
+        .environment(rebroadcast)
 }

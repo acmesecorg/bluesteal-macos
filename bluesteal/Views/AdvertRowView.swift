@@ -28,6 +28,7 @@ struct AdvertRowView: View {
     let advert: CableAdvert
     var source: AdvertSource = .local
     @State private var expanded = false
+    @Environment(RebroadcastService.self) private var rebroadcast
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -75,6 +76,11 @@ struct AdvertRowView: View {
                     .frame(width: 16, alignment: .center)
                     .help(source == .relay ? "Received from paired peer" : "Locally scanned")
 
+                Circle()
+                    .fill(isRebroadcasting ? Color.green : Color.clear)
+                    .frame(width: 8, height: 8)
+                    .help(isRebroadcasting ? "Re-broadcasting locally" : "")
+
                 Text(Self.timeFormatter.string(from: advert.lastSeen))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -102,6 +108,10 @@ struct AdvertRowView: View {
             .padding(.vertical, 2)
         }
         .listRowBackground(source == .relay ? Color.purple.opacity(0.06) : Color.clear)
+    }
+
+    private var isRebroadcasting: Bool {
+        source == .relay && rebroadcast.activeAdvertID == advert.id
     }
 
     private var variantBadge: some View {

@@ -13,6 +13,11 @@ import Observation
 final class AdvertStore {
     private(set) var adverts: [CableAdvert] = []
     private(set) var totalDetections: Int = 0
+    /// Count of scanner events suppressed because they matched a payload we
+    /// are currently re-broadcasting ourselves. Surfaced for diagnostics; the
+    /// suppressed events never enter `adverts` or get forwarded over the
+    /// relay.
+    private(set) var selfEchoesDropped: Int = 0
     private var index: [String: Int] = [:]   // CableAdvert.id -> array index
 
     private let logger: JSONLLogger
@@ -22,6 +27,13 @@ final class AdvertStore {
     /// without polling.
     var onIngest: ((CableAdvert) -> Void)?
 
+    /// Loop-guard hook. When set, every incoming scanner-classified payload
+    /// is tested against this closure; matches are dropped before upsert.
+    /// `RebroadcastService` registers a closure pointing at its own
+    /// self-published set so we don't ingest, render, or relay echoes of
+    /// adverts we're emitting ourselves.
+    var selfPayloadFilter: ((String) -> Bool)?
+
     init(logger: JSONLLogger) {
         self.logger = logger
     }
@@ -29,6 +41,10 @@ final class AdvertStore {
     func ingest(_ event: RawAdvertEvent) {
         // Service-data path: one row per caBLE service-data entry (FFF9 / FDE2).
         for (uuid, payload) in event.serviceData where AdvertClassifier.isCableUUID(uuid) {
+            if selfPayloadFilter?(payload.hexEncoded) == true {
+                selfEchoesDropped += 1
+                continue
+            }
             let variant = AdvertClassifier.classify(uuid: uuid, payload: payload)
             upsert(payload: payload, variant: variant, serviceUUID: uuid, event: event)
         }
@@ -36,6 +52,10 @@ final class AdvertStore {
         // Manufacturer-data path: Google caBLE v1 advert under company ID 0x00E0.
         if let mfgData = event.manufacturerData,
            let (variant, eid) = AdvertClassifier.classifyManufacturerData(mfgData) {
+            if selfPayloadFilter?(eid.hexEncoded) == true {
+                selfEchoesDropped += 1
+                return
+            }
             upsert(payload: eid, variant: variant, serviceUUID: nil, event: event)
         }
     }

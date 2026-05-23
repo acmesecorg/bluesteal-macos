@@ -59,13 +59,25 @@ final class AdvertRelay {
         relay.onMessage = { [weak self] message in
             self?.handleInbound(message)
         }
+        // Heartbeats run for both Host and Peer for the full duration of
+        // `.open` — both directions must keep the NAT mapping fresh, otherwise
+        // the silent side's UDP binding ages out and ICE consent-freshness
+        // tears the session down. See docs §10.
+        relay.onStateChange = { [weak self] newState in
+            guard let self else { return }
+            if case .open = newState {
+                self.startHeartbeats()
+            } else {
+                self.stopHeartbeats()
+            }
+        }
     }
 
     func startHeartbeats() {
         heartbeatTask?.cancel()
         heartbeatTask = Task { @MainActor [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
                 guard let self else { return }
                 if case .open = self.relay.state {
                     let ids = self.store.adverts.map(\.id)

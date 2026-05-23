@@ -463,7 +463,14 @@ final class RelayClient {
         tracer.log("ice", "ice.connectionState", ["state": "\(newState.rawValue)"])
         switch newState {
         case .failed:
-            state = .closed(reason: "ICE failed")
+            // Full teardown (not just setting state) so per-session flags —
+            // `hasRemoteDescription`, the candidate buffers — get cleared.
+            // Without this, the next host()/join() reuses a stale
+            // `hasRemoteDescription = true` and immediately publishes local
+            // ICE candidates *before* the new peer has subscribed, which
+            // breaks re-pairing after an ICE failure. See
+            // docs/MACOS_RELAY_PAIRING_FIXES.md §10.
+            disconnect(reason: "ICE failed")
         default:
             break  // wait for data channel .open
         }

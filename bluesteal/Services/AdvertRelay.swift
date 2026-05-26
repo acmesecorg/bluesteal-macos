@@ -29,6 +29,18 @@ final class AdvertRelay {
 
     private var heartbeatTask: Task<Void, Never>?
 
+    /// When set (tunnel mode), outbound adverts are serialised to JSON and sent
+    /// through this closure instead of the WebRTC data channel. Mirrors Windows
+    /// `AdvertRelay.TunnelSend`.
+    var tunnelSend: ((Data) -> Void)?
+
+    private let encoder: JSONEncoder = {
+        let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e
+    }()
+    private let decoder: JSONDecoder = {
+        let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601; return d
+    }()
+
     /// Called for every local advert just before it's sent to the peer.
     /// Mirrors Windows's `AdvertStore.OnIngest` subscription path —
     /// secondary observers (e.g. `DuplicatePayloadDetector`) hang off this
@@ -52,7 +64,12 @@ final class AdvertRelay {
         // any local observers — the duplicate-payload detector hooks here).
         store.onIngest = { [weak self] advert in
             guard let self else { return }
-            self.relay.send(.advert(.init(from: advert)))
+            let msg = RelayMessage.advert(.init(from: advert))
+            if let tunnelSend = self.tunnelSend {
+                if let data = try? self.encoder.encode(msg) { tunnelSend(data) }
+            } else {
+                self.relay.send(msg)
+            }
             self.onLocalIngest?(advert)
         }
         // Inbound: anything the peer sends us, mirror into the received list.
@@ -92,6 +109,14 @@ final class AdvertRelay {
         heartbeatTask = nil
     }
 
+    /// Decodes a raw JSON frame delivered by the tunnel transport and routes it
+    /// through the same inbound path as the WebRTC channel. Mirrors Windows
+    /// `AdvertRelay.HandleInboundFrame`.
+    func handleTunnelFrame(_ data: Data) {
+        guard let message = try? decoder.decode(RelayMessage.self, from: data) else { return }
+        handleInbound(message)
+    }
+
     private func handleInbound(_ message: RelayMessage) {
         switch message {
         case .advert(let wire):
@@ -110,6 +135,10 @@ final class AdvertRelay {
             lastHostHeartbeat = h.ts
         case .bye:
             // RelayClient tears down on bye.
+            break
+        case .handoffOffer, .handoffAck:
+            // Tunnel-transport control frames; handled inside TunnelTransport,
+            // never surfaced on the WebRTC onMessage path.
             break
         }
     }

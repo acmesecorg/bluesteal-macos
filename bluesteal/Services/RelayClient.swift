@@ -555,9 +555,11 @@ final class RelayClient {
 
     private func messageTypeName(_ m: RelayMessage) -> String {
         switch m {
-        case .advert:    return "advert"
-        case .heartbeat: return "heartbeat"
-        case .bye:       return "bye"
+        case .advert:       return "advert"
+        case .heartbeat:    return "heartbeat"
+        case .bye:          return "bye"
+        case .handoffOffer: return "handoffOffer"
+        case .handoffAck:   return "handoffAck"
         }
     }
 

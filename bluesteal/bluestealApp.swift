@@ -16,6 +16,7 @@ struct bluestealApp: App {
     @State private var duplicateDetector: DuplicatePayloadDetector
     @State private var bleAdvertiser: BleAdvertiser
     @State private var rebroadcast: RebroadcastService
+    @State private var tunnel: TunnelTransport
 
     init() {
         let tracer = RelayTracer()
@@ -44,6 +45,12 @@ struct bluestealApp: App {
         store.selfPayloadFilter = { [weak rebroadcast] hex in
             rebroadcast?.isSelfPublished(payloadHex: hex) ?? false
         }
+        // caBLE tunnel transport (parallel to WebRTC). Inbound decrypted frames
+        // are routed into the same advert path as the WebRTC channel.
+        let tunnel = TunnelTransport(tracer: tracer)
+        tunnel.onFrame = { [weak advertRelay] bytes in
+            advertRelay?.handleTunnelFrame(Data(bytes))
+        }
         _scanner = State(initialValue: scanner)
         _store = State(initialValue: store)
         _relay = State(initialValue: relay)
@@ -51,6 +58,7 @@ struct bluestealApp: App {
         _duplicateDetector = State(initialValue: detector)
         _bleAdvertiser = State(initialValue: advertiser)
         _rebroadcast = State(initialValue: rebroadcast)
+        _tunnel = State(initialValue: tunnel)
     }
 
     var body: some Scene {
@@ -63,6 +71,7 @@ struct bluestealApp: App {
                 .environment(duplicateDetector)
                 .environment(bleAdvertiser)
                 .environment(rebroadcast)
+                .environment(tunnel)
         }
     }
 }

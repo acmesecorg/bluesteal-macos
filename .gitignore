@@ -3,3 +3,4 @@
 # TURN credentials — copy Secrets.template.swift → Secrets.swift before
 # building (see root README and TURN_ROTATION.local.md).
 bluesteal/Secrets.swift
+/tools/TunnelProbe/.build

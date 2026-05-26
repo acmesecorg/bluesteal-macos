@@ -12,6 +12,10 @@ enum RelayMessage: Codable, Equatable {
     case advert(Advert)
     case heartbeat(Heartbeat)
     case bye(reason: String)
+    /// caBLE tunnel make-before-break handoff control messages. Only used by
+    /// the tunnel transport; the WebRTC path never emits or receives these.
+    case handoffOffer(HandoffOffer)
+    case handoffAck(HandoffAck)
 
     struct Advert: Codable, Equatable {
         var id: String
@@ -40,8 +44,23 @@ enum RelayMessage: Codable, Equatable {
         var knownIds: [String]
     }
 
+    /// Host announces the next hop's routing_id + minute over the current
+    /// tunnel. Promotion still requires an ack — `validFrom` is advisory.
+    struct HandoffOffer: Codable, Equatable {
+        var nextRoutingId: String      // 6 hex chars
+        var nextMinute: Int64          // peer derives next tunnel_id from (code, nextMinute)
+        var validFrom: Date
+    }
+
+    /// Peer's reply: `connected` true iff its NKpsk0 on the new hop succeeded.
+    /// `nextRoutingId` is the correlation key across overlapping hops.
+    struct HandoffAck: Codable, Equatable {
+        var nextRoutingId: String
+        var connected: Bool
+    }
+
     private enum CodingKeys: String, CodingKey { case type, payload, reason }
-    private enum Kind: String, Codable { case advert, heartbeat, bye }
+    private enum Kind: String, Codable { case advert, heartbeat, bye, handoffOffer, handoffAck }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -55,6 +74,12 @@ enum RelayMessage: Codable, Equatable {
         case .bye(let reason):
             try c.encode(Kind.bye, forKey: .type)
             try c.encode(reason, forKey: .reason)
+        case .handoffOffer(let o):
+            try c.encode(Kind.handoffOffer, forKey: .type)
+            try c.encode(o, forKey: .payload)
+        case .handoffAck(let a):
+            try c.encode(Kind.handoffAck, forKey: .type)
+            try c.encode(a, forKey: .payload)
         }
     }
 
@@ -62,9 +87,11 @@ enum RelayMessage: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let kind = try c.decode(Kind.self, forKey: .type)
         switch kind {
-        case .advert:    self = .advert(try c.decode(Advert.self, forKey: .payload))
-        case .heartbeat: self = .heartbeat(try c.decode(Heartbeat.self, forKey: .payload))
-        case .bye:       self = .bye(reason: try c.decode(String.self, forKey: .reason))
+        case .advert:       self = .advert(try c.decode(Advert.self, forKey: .payload))
+        case .heartbeat:    self = .heartbeat(try c.decode(Heartbeat.self, forKey: .payload))
+        case .bye:          self = .bye(reason: try c.decode(String.self, forKey: .reason))
+        case .handoffOffer: self = .handoffOffer(try c.decode(HandoffOffer.self, forKey: .payload))
+        case .handoffAck:   self = .handoffAck(try c.decode(HandoffAck.self, forKey: .payload))
         }
     }
 }

@@ -41,7 +41,7 @@ final class TunnelTransport {
     private static let oldHopLinger: UInt64 = 15
 
     // Observable surface (RelayView reads these directly)
-    private(set) var state: RelayClient.State = .idle {
+    private(set) var state: RelayState = .idle {
         didSet { if state != oldValue { tracer.log("tunnel", "state.change",
             ["transport": "cable-tunnel", "to": Self.label(state)]) } }
     }
@@ -56,7 +56,7 @@ final class TunnelTransport {
 
     private let tracer: RelayTracer
 
-    private var role: RelayClient.Role = .host
+    private var role: RelayRole = .host
     private var code = ""
     private var keys: TunnelKeys?
     private var host = "cable.ua5v.com"
@@ -432,7 +432,7 @@ final class TunnelTransport {
         }
     }
 
-    private static func label(_ s: RelayClient.State) -> String {
+    private static func label(_ s: RelayState) -> String {
         switch s {
         case .idle:           return "idle"
         case .hosting:        return "hosting"
@@ -442,8 +442,4 @@ final class TunnelTransport {
         case .closed(let r):  return "closed(\(r))"
         }
     }
-}
-
-extension RelayClient.State {
-    var isClosed: Bool { if case .closed = self { return true } else { return false } }
 }

@@ -9,7 +9,6 @@ import AppKit
 struct ContentView: View {
     @Environment(CableScanner.self) private var scanner
     @Environment(AdvertStore.self) private var store
-    @Environment(RelayClient.self) private var relay
     @Environment(AdvertRelay.self) private var advertRelay
     @Environment(DuplicatePayloadDetector.self) private var duplicateDetector
 
@@ -152,19 +151,17 @@ private struct DiagnosticModeBanner: View {
 #Preview {
     let tracer = RelayTracer()
     let store = AdvertStore(logger: JSONLLogger())
-    let relay = RelayClient(tracer: tracer)
-    let advertRelay = AdvertRelay(store: store, relay: relay)
+    let advertRelay = AdvertRelay(store: store, tracer: tracer)
     let advertiser = BleAdvertiser(tracer: tracer)
     let rebroadcast = RebroadcastService(advertRelay: advertRelay,
                                           advertiser: advertiser,
-                                          relay: relay,
                                           tracer: tracer)
     return ContentView()
         .environment(CableScanner(previewMode: true))
         .environment(store)
-        .environment(relay)
         .environment(advertRelay)
         .environment(DuplicatePayloadDetector(store: store, relay: advertRelay))
         .environment(advertiser)
         .environment(rebroadcast)
+        .environment(TunnelTransport(tracer: tracer))
 }

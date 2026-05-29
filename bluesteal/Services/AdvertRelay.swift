@@ -2,9 +2,10 @@
 //  AdvertRelay.swift
 //  bluesteal
 //
-//  Bridges the local AdvertStore with a paired RelayClient. The host pushes
-//  every deduped CableAdvert to the peer; the peer mirrors them into a
-//  receive-side list so the existing AdvertRowView can render them with
+//  Bridges the local AdvertStore with the paired peer over the caBLE tunnel.
+//  Outbound: every deduped CableAdvert the scanner sees is pushed through
+//  `tunnelSend`. Inbound: frames arriving from the tunnel are deserialised and
+//  mirrored into `received` so the existing AdvertRowView renders them with
 //  zero changes.
 //
 
@@ -25,13 +26,12 @@ final class AdvertRelay {
     private var receivedIndex: [String: Int] = [:]
 
     private let store: AdvertStore
-    private let relay: RelayClient
+    private let tracer: RelayTracer?
 
-    private var heartbeatTask: Task<Void, Never>?
-
-    /// When set (tunnel mode), outbound adverts are serialised to JSON and sent
-    /// through this closure instead of the WebRTC data channel. Mirrors Windows
-    /// `AdvertRelay.TunnelSend`.
+    /// Outbound adverts are serialised to JSON and sent through this closure
+    /// (the caBLE tunnel transport). Set by the view once the tunnel is
+    /// connected; nil means not connected, so adverts are not forwarded.
+    /// Mirrors Windows `AdvertRelay.TunnelSend`.
     var tunnelSend: ((Data) -> Void)?
 
     private let encoder: JSONEncoder = {
@@ -53,65 +53,29 @@ final class AdvertRelay {
     /// `AdvertRelay.OnReceived` event.
     var onReceived: ((CableAdvert) -> Void)?
 
-    init(store: AdvertStore, relay: RelayClient) {
+    init(store: AdvertStore, tracer: RelayTracer? = nil) {
         self.store = store
-        self.relay = relay
+        self.tracer = tracer
         wireUp()
     }
 
     private func wireUp() {
-        // Outbound: anything our scanner sees, forward to the peer (and to
-        // any local observers — the duplicate-payload detector hooks here).
+        // Outbound: anything our scanner sees, forward to the peer over the
+        // tunnel (and to any local observers — the duplicate-payload detector
+        // hooks here). When the tunnel isn't connected, `tunnelSend` is nil and
+        // adverts are simply not forwarded.
         store.onIngest = { [weak self] advert in
             guard let self else { return }
-            let msg = RelayMessage.advert(.init(from: advert))
             if let tunnelSend = self.tunnelSend {
+                let msg = RelayMessage.advert(.init(from: advert))
                 if let data = try? self.encoder.encode(msg) { tunnelSend(data) }
-            } else {
-                self.relay.send(msg)
             }
             self.onLocalIngest?(advert)
         }
-        // Inbound: anything the peer sends us, mirror into the received list.
-        relay.onMessage = { [weak self] message in
-            self?.handleInbound(message)
-        }
-        // Heartbeats run for both Host and Peer for the full duration of
-        // `.open` — both directions must keep the NAT mapping fresh, otherwise
-        // the silent side's UDP binding ages out and ICE consent-freshness
-        // tears the session down. See docs §10.
-        relay.onStateChange = { [weak self] newState in
-            guard let self else { return }
-            if case .open = newState {
-                self.startHeartbeats()
-            } else {
-                self.stopHeartbeats()
-            }
-        }
-    }
-
-    func startHeartbeats() {
-        heartbeatTask?.cancel()
-        heartbeatTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                guard let self else { return }
-                if case .open = self.relay.state {
-                    let ids = self.store.adverts.map(\.id)
-                    self.relay.send(.heartbeat(.init(ts: Date(), knownIds: ids)))
-                }
-            }
-        }
-    }
-
-    func stopHeartbeats() {
-        heartbeatTask?.cancel()
-        heartbeatTask = nil
     }
 
     /// Decodes a raw JSON frame delivered by the tunnel transport and routes it
-    /// through the same inbound path as the WebRTC channel. Mirrors Windows
-    /// `AdvertRelay.HandleInboundFrame`.
+    /// through the inbound path. Mirrors Windows `AdvertRelay.HandleInboundFrame`.
     func handleTunnelFrame(_ data: Data) {
         guard let message = try? decoder.decode(RelayMessage.self, from: data) else { return }
         handleInbound(message)
@@ -121,6 +85,12 @@ final class AdvertRelay {
         switch message {
         case .advert(let wire):
             guard let advert = CableAdvert(wire: wire) else { return }
+            tracer?.log("relay", "relay.advert.recv", [
+                "id": advert.id,
+                "variant": advert.variant.wireName,
+                "payloadHexPrefix": String(advert.payloadHex.prefix(16)),
+                "rssi": advert.rssi
+            ])
             if let idx = receivedIndex[advert.id] {
                 received[idx] = advert
             } else {
@@ -134,11 +104,11 @@ final class AdvertRelay {
         case .heartbeat(let h):
             lastHostHeartbeat = h.ts
         case .bye:
-            // RelayClient tears down on bye.
+            // The tunnel transport tears itself down on bye; nothing to do here.
             break
         case .handoffOffer, .handoffAck:
             // Tunnel-transport control frames; handled inside TunnelTransport,
-            // never surfaced on the WebRTC onMessage path.
+            // never surfaced on this inbound path.
             break
         }
     }

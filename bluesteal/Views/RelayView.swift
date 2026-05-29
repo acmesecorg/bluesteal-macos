@@ -7,27 +7,18 @@ import SwiftUI
 import AppKit
 
 struct RelayView: View {
-    @Environment(RelayClient.self) private var relay
     @Environment(AdvertRelay.self) private var advertRelay
     @Environment(RebroadcastService.self) private var rebroadcast
     @Environment(TunnelTransport.self) private var tunnel
 
-    enum TransportKind: String, CaseIterable { case webRTC = "WebRTC", tunnel = "Tunnel" }
-
     @State private var joinCode: String = ""
     @State private var showJoinField: Bool = false
-    @State private var transport: TransportKind = .tunnel
 
-    /// The tunnel transport "owns" the UI whenever it is past idle/closed;
-    /// otherwise the WebRTC RelayClient drives it.
-    private var tunnelActive: Bool {
-        switch tunnel.state {
-        case .idle, .closed: return false
-        default:             return true
-        }
+    private var state: RelayState { tunnel.state }
+
+    private var tunnelOpen: Bool {
+        if case .open = tunnel.state { return true } else { return false }
     }
-
-    private var effectiveState: RelayClient.State { tunnelActive ? tunnel.state : relay.state }
 
     var body: some View {
         HStack(spacing: 12) {
@@ -35,7 +26,7 @@ struct RelayView: View {
 
             Divider().frame(height: 16)
 
-            switch effectiveState {
+            switch state {
             case .idle, .closed:
                 idleControls
             case .hosting(let code):
@@ -57,6 +48,11 @@ struct RelayView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(.bar)
+        // Drive the rebroadcast pipeline from the tunnel's Open state — the
+        // tunnel is the only transport, so this is what gates the sweep.
+        .onChange(of: tunnelOpen, initial: true) { _, open in
+            rebroadcast.externalOpen = open
+        }
     }
 
     private var openLogsLink: some View {
@@ -76,21 +72,13 @@ struct RelayView: View {
 
     private var idleControls: some View {
         HStack(spacing: 8) {
-            Picker("", selection: $transport) {
-                ForEach(TransportKind.allCases, id: \.self) { Text($0.rawValue).tag($0) }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(width: 104)
-            .controlSize(.small)
-
-            Button("Host", action: startHost)
+            Button("Host", action: startTunnelHost)
                 .controlSize(.small)
 
             if showJoinField {
-                TextField("code or token", text: $joinCode)
+                TextField("token (e.g. ABCDE-123456)", text: $joinCode)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 140)
+                    .frame(width: 180)
                     .font(.system(.body, design: .monospaced))
                     .onSubmit { submitJoin() }
                 Button("Connect", action: submitJoin)
@@ -107,12 +95,10 @@ struct RelayView: View {
     }
 
     private func hostingControls(code: String) -> some View {
-        let isTunnel = tunnelActive
-        let ready = !isTunnel || tunnel.token != nil
-        let displayValue = isTunnel ? (tunnel.token ?? "waiting…") : code
-        let label = isTunnel ? "Token" : "Code"
+        let displayValue = tunnel.token ?? "waiting…"
+        let ready = tunnel.token != nil
         return HStack(spacing: 10) {
-            Text(label)
+            Text("Token")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Text(displayValue)
@@ -131,7 +117,7 @@ struct RelayView: View {
             .controlSize(.small)
             .buttonStyle(.borderless)
             .disabled(!ready)
-            .help("Copy \(label.lowercased())")
+            .help("Copy token")
             Text("waiting for peer…")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -143,31 +129,17 @@ struct RelayView: View {
 
     private var openControls: some View {
         HStack(spacing: 12) {
-            if tunnelActive {
-                Text("sent \(tunnel.messagesSent) · recv \(tunnel.messagesReceived)")
-                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                Text("hbt \(tunnel.heartbeatCount)")
-                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                if tunnel.hopNumber > 0 {
-                    Text("hop \(tunnel.hopNumber)")
-                        .font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Color.blue.opacity(0.18))
-                        .foregroundStyle(.blue)
-                        .clipShape(Capsule())
-                }
-            } else {
-                Text(relay.messagesSent > 0 ? "sent \(relay.messagesSent)" : "recv \(relay.messagesReceived)")
-                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                Text("hbt \(relay.heartbeatCount)")
-                    .font(.caption).monospacedDigit().foregroundStyle(.secondary)
-                if relay.isUsingTURN {
-                    Text("TURN").font(.caption2.weight(.semibold))
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(Color.orange.opacity(0.18))
-                        .foregroundStyle(.orange)
-                        .clipShape(Capsule())
-                }
+            Text("sent \(tunnel.messagesSent) · recv \(tunnel.messagesReceived)")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            Text("hbt \(tunnel.heartbeatCount)")
+                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+            if tunnel.hopNumber > 0 {
+                Text("hop \(tunnel.hopNumber)")
+                    .font(.caption2.weight(.semibold))
+                    .padding(.horizontal, 5).padding(.vertical, 1)
+                    .background(Color.blue.opacity(0.18))
+                    .foregroundStyle(.blue)
+                    .clipShape(Capsule())
             }
             rebroadcastChip
             Button("Disconnect") { cancelOrDisconnect() }
@@ -202,7 +174,7 @@ struct RelayView: View {
     }
 
     private var statusColor: Color {
-        switch effectiveState {
+        switch state {
         case .idle, .closed:                           return .secondary
         case .hosting, .joining, .negotiating:         return .orange
         case .open:                                    return .green
@@ -210,50 +182,29 @@ struct RelayView: View {
     }
 
     private var stateLabel: String {
-        let prefix = tunnelActive ? "tunnel " : ""
-        switch effectiveState {
+        switch state {
         case .idle:                                    return "idle"
-        case .hosting:                                 return "\(prefix)hosting"
-        case .joining(let c):                          return "\(prefix)joining \(c)"
-        case .negotiating:                             return "\(prefix)negotiating"
-        case .open:                                    return "\(prefix)open"
+        case .hosting:                                 return "tunnel hosting"
+        case .joining(let c):                          return "tunnel joining \(c)"
+        case .negotiating:                             return "tunnel negotiating"
+        case .open:                                    return "tunnel open"
         case .closed(let r):                           return "closed (\(r))"
         }
     }
 
-    /// Uppercased + filtered to the alphabet — strips spaces, ambiguous
-    /// I/L/O, and any digits the user might paste from a stale code.
-    private var normalisedJoinCode: String {
-        let allowed = Set(SignalingClient.codeAlphabet)
-        return joinCode.uppercased().filter { allowed.contains($0) }
-    }
-
     private var joinInputValid: Bool {
-        TunnelKeyDerivation.isTunnelToken(joinCode) ||
-            normalisedJoinCode.count == SignalingClient.codeLength
+        TunnelKeyDerivation.isTunnelToken(joinCode.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
     private func submitJoin() {
         let raw = joinCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        if TunnelKeyDerivation.isTunnelToken(raw) {
-            startTunnelJoin(token: raw.uppercased())
-        } else {
-            let code = normalisedJoinCode
-            guard code.count == SignalingClient.codeLength else { return }
-            relay.join(code: code)
-        }
+        guard TunnelKeyDerivation.isTunnelToken(raw) else { return }
+        startTunnelJoin(token: raw.uppercased())
         showJoinField = false
         joinCode = ""
     }
 
     // MARK: - Tunnel transport actions
-
-    private func startHost() {
-        switch transport {
-        case .webRTC: _ = relay.host()
-        case .tunnel: startTunnelHost()
-        }
-    }
 
     private func wireTunnelSend() {
         advertRelay.tunnelSend = { data in
@@ -262,7 +213,7 @@ struct RelayView: View {
     }
 
     private func startTunnelHost() {
-        let code = SignalingClient.makeCode()
+        let code = PairingCode.make()
         wireTunnelSend()
         Task { try? await tunnel.host(code: code) }
     }
@@ -273,11 +224,7 @@ struct RelayView: View {
     }
 
     private func cancelOrDisconnect() {
-        if tunnelActive {
-            advertRelay.tunnelSend = nil
-            tunnel.disconnect()
-        } else {
-            relay.disconnect(reason: "user")
-        }
+        advertRelay.tunnelSend = nil
+        tunnel.disconnect()
     }
 }

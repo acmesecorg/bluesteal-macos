@@ -7,9 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		BD9B08372FBB8D9300CAAF1C /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = BD9B08362FBB8D9300CAAF1C /* WebRTC */; };
-		BD9B083A2FBB8DA500CAAF1C /* CocoaMQTT in Frameworks */ = {isa = PBXBuildFile; productRef = BD9B08392FBB8DA500CAAF1C /* CocoaMQTT */; };
-		BD9B083C2FBB8DA500CAAF1C /* CocoaMQTTWebSocket in Frameworks */ = {isa = PBXBuildFile; productRef = BD9B083B2FBB8DA500CAAF1C /* CocoaMQTTWebSocket */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -29,9 +26,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				BD9B083C2FBB8DA500CAAF1C /* CocoaMQTTWebSocket in Frameworks */,
-				BD9B083A2FBB8DA500CAAF1C /* CocoaMQTT in Frameworks */,
-				BD9B08372FBB8D9300CAAF1C /* WebRTC in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -73,11 +67,6 @@
 				BDDBD8832FBAFF0000DDE102 /* bluesteal */,
 			);
 			name = bluesteal;
-			packageProductDependencies = (
-				BD9B08362FBB8D9300CAAF1C /* WebRTC */,
-				BD9B08392FBB8DA500CAAF1C /* CocoaMQTT */,
-				BD9B083B2FBB8DA500CAAF1C /* CocoaMQTTWebSocket */,
-			);
 			productName = bluesteal;
 			productReference = BDDBD8812FBAFF0000DDE102 /* bluesteal.app */;
 			productType = "com.apple.product-type.application";
@@ -106,10 +95,6 @@
 			);
 			mainGroup = BDDBD8782FBAFF0000DDE102;
 			minimizedProjectReferenceProxies = 1;
-			packageReferences = (
-				BD9B08352FBB8D9300CAAF1C /* XCRemoteSwiftPackageReference "WebRTC" */,
-				BD9B08382FBB8DA500CAAF1C /* XCRemoteSwiftPackageReference "CocoaMQTT" */,
-			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = BDDBD8822FBAFF0000DDE102 /* Products */;
 			projectDirPath = "";
@@ -350,42 +335,6 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		BD9B08352FBB8D9300CAAF1C /* XCRemoteSwiftPackageReference "WebRTC" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/stasel/WebRTC";
-			requirement = {
-				kind = exactVersion;
-				version = 134.0.0;
-			};
-		};
-		BD9B08382FBB8DA500CAAF1C /* XCRemoteSwiftPackageReference "CocoaMQTT" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/emqx/CocoaMQTT";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 2.2.4;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		BD9B08362FBB8D9300CAAF1C /* WebRTC */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = BD9B08352FBB8D9300CAAF1C /* XCRemoteSwiftPackageReference "WebRTC" */;
-			productName = WebRTC;
-		};
-		BD9B08392FBB8DA500CAAF1C /* CocoaMQTT */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = BD9B08382FBB8DA500CAAF1C /* XCRemoteSwiftPackageReference "CocoaMQTT" */;
-			productName = CocoaMQTT;
-		};
-		BD9B083B2FBB8DA500CAAF1C /* CocoaMQTTWebSocket */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = BD9B08382FBB8DA500CAAF1C /* XCRemoteSwiftPackageReference "CocoaMQTT" */;
-			productName = CocoaMQTTWebSocket;
-		};
-/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = BDDBD8792FBAFF0000DDE102 /* Project object */;
 }

@@ -44,7 +44,6 @@ final class RebroadcastService {
 
     private let advertRelay: AdvertRelay
     private let advertiser: BleAdvertiser
-    private let relay: RelayClient
     private let tracer: RelayTracer
 
     private var sweepTask: Task<Void, Never>?
@@ -52,37 +51,27 @@ final class RebroadcastService {
     private var lastSwapTime: Date = .distantPast
     private var currentPayloadHex: String?
 
+    /// The view sets this true while the caBLE tunnel is Open, which gates the
+    /// rebroadcast pipeline (sweep + publish). False tears everything down.
+    /// Mirrors Windows `RebroadcastService.ExternalOpen`.
+    var externalOpen: Bool = false {
+        didSet {
+            guard externalOpen != oldValue else { return }
+            if externalOpen { startSweep() } else { stopSweep() }
+        }
+    }
+
     init(advertRelay: AdvertRelay,
          advertiser: BleAdvertiser,
-         relay: RelayClient,
          tracer: RelayTracer) {
         self.advertRelay = advertRelay
         self.advertiser = advertiser
-        self.relay = relay
         self.tracer = tracer
 
         advertiser.onStatusChanged = { [weak self] active, error in
             guard let self else { return }
             self.isActive = active
             self.lastError = error
-        }
-
-        // Subscribe to relay state via the same callback the heartbeat loop
-        // uses. `onStateChange` is single-subscriber, but `AdvertRelay` is
-        // the only consumer today and `RebroadcastService` runs in parallel
-        // with it. To avoid stomping on `AdvertRelay`'s subscription we
-        // observe via a wrapper that fans out.
-        let previous = relay.onStateChange
-        relay.onStateChange = { [weak self] newState in
-            previous?(newState)
-            self?.handle(relayState: newState)
-        }
-
-        // If the relay is already open by the time we're constructed, kick
-        // the sweep off immediately rather than waiting for the next state
-        // transition (which may never come).
-        if case .open = relay.state {
-            startSweep()
         }
     }
 
@@ -95,14 +84,6 @@ final class RebroadcastService {
     }
 
     // MARK: - State plumbing
-
-    private func handle(relayState: RelayClient.State) {
-        if case .open = relayState {
-            startSweep()
-        } else {
-            stopSweep()
-        }
-    }
 
     private func startSweep() {
         sweepTask?.cancel()

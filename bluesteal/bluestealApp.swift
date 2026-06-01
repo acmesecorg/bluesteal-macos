@@ -16,6 +16,7 @@ struct bluestealApp: App {
     @State private var bleAdvertiser: BleAdvertiser
     @State private var rebroadcast: RebroadcastService
     @State private var tunnel: TunnelTransport
+    @State private var qrReceiver: QRReceiver
 
     init() {
         let tracer = RelayTracer()
@@ -43,10 +44,14 @@ struct bluestealApp: App {
             rebroadcast?.isSelfPublished(payloadHex: hex) ?? false
         }
         // caBLE tunnel transport — the only transport. Inbound decrypted frames
-        // are routed into the advert path.
+        // are routed to the QR display modal if they're shared QR codes,
+        // otherwise into the advert path.
         let tunnel = TunnelTransport(tracer: tracer)
-        tunnel.onFrame = { [weak advertRelay] bytes in
-            advertRelay?.handleTunnelFrame(Data(bytes))
+        let qrReceiver = QRReceiver(tracer: tracer)
+        tunnel.onFrame = { [weak advertRelay, weak qrReceiver] bytes in
+            let data = Data(bytes)
+            if qrReceiver?.tryHandle(data) == true { return }
+            advertRelay?.handleTunnelFrame(data)
         }
         _scanner = State(initialValue: scanner)
         _store = State(initialValue: store)
@@ -55,6 +60,7 @@ struct bluestealApp: App {
         _bleAdvertiser = State(initialValue: advertiser)
         _rebroadcast = State(initialValue: rebroadcast)
         _tunnel = State(initialValue: tunnel)
+        _qrReceiver = State(initialValue: qrReceiver)
 
         Self.handleStartupArgs(tunnel: tunnel, advertRelay: advertRelay, tracer: tracer)
     }
@@ -98,6 +104,7 @@ struct bluestealApp: App {
                 .environment(bleAdvertiser)
                 .environment(rebroadcast)
                 .environment(tunnel)
+                .environment(qrReceiver)
         }
     }
 }

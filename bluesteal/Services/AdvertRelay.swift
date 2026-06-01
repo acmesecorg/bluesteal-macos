@@ -110,6 +110,9 @@ final class AdvertRelay {
             // Tunnel-transport control frames; handled inside TunnelTransport,
             // never surfaced on this inbound path.
             break
+        case .qr:
+            // Shared QR codes are routed to QRReceiver before reaching here.
+            break
         }
     }
 

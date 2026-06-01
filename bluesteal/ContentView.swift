@@ -11,8 +11,10 @@ struct ContentView: View {
     @Environment(AdvertStore.self) private var store
     @Environment(AdvertRelay.self) private var advertRelay
     @Environment(DuplicatePayloadDetector.self) private var duplicateDetector
+    @Environment(QRReceiver.self) private var qrReceiver
 
     var body: some View {
+        @Bindable var qr = qrReceiver
         VStack(spacing: 0) {
             if duplicateDetector.isWarningVisible {
                 DuplicateWarningBanner(
@@ -71,6 +73,9 @@ struct ContentView: View {
         }
         .animation(.easeInOut(duration: 0.2), value: duplicateDetector.isWarningVisible)
         .frame(minWidth: 820, minHeight: 480)
+        .sheet(item: $qr.received) { item in
+            ReceivedQRView(uri: item.uri)
+        }
     }
 }
 
@@ -164,4 +169,5 @@ private struct DiagnosticModeBanner: View {
         .environment(advertiser)
         .environment(rebroadcast)
         .environment(TunnelTransport(tracer: tracer))
+        .environment(QRReceiver(tracer: tracer))
 }

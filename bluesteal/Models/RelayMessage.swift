@@ -16,6 +16,9 @@ enum RelayMessage: Codable, Equatable {
     /// the tunnel transport; the WebRTC path never emits or receives these.
     case handoffOffer(HandoffOffer)
     case handoffAck(HandoffAck)
+    /// A `FIDO:/` QR string shared by the peer for display (scan-and-share
+    /// convenience feature). Additive; older peers ignore unknown message types.
+    case qr(QrCode)
 
     struct Advert: Codable, Equatable {
         var id: String
@@ -59,8 +62,13 @@ enum RelayMessage: Codable, Equatable {
         var connected: Bool
     }
 
+    /// A scanned `FIDO:/` QR string, relayed from the peer to render and display.
+    struct QrCode: Codable, Equatable {
+        var uri: String
+    }
+
     private enum CodingKeys: String, CodingKey { case type, payload, reason }
-    private enum Kind: String, Codable { case advert, heartbeat, bye, handoffOffer, handoffAck }
+    private enum Kind: String, Codable { case advert, heartbeat, bye, handoffOffer, handoffAck, qr }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -80,6 +88,9 @@ enum RelayMessage: Codable, Equatable {
         case .handoffAck(let a):
             try c.encode(Kind.handoffAck, forKey: .type)
             try c.encode(a, forKey: .payload)
+        case .qr(let q):
+            try c.encode(Kind.qr, forKey: .type)
+            try c.encode(q, forKey: .payload)
         }
     }
 
@@ -92,6 +103,7 @@ enum RelayMessage: Codable, Equatable {
         case .bye:          self = .bye(reason: try c.decode(String.self, forKey: .reason))
         case .handoffOffer: self = .handoffOffer(try c.decode(HandoffOffer.self, forKey: .payload))
         case .handoffAck:   self = .handoffAck(try c.decode(HandoffAck.self, forKey: .payload))
+        case .qr:           self = .qr(try c.decode(QrCode.self, forKey: .payload))
         }
     }
 }

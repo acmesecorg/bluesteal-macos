@@ -76,7 +76,14 @@ struct RelayView: View {
                 .controlSize(.small)
 
             if showJoinField {
-                TextField("token (e.g. ABCDE-123456)", text: $joinCode)
+                // Custom binding strips non-alphanumeric, uppercases, caps at
+                // 11 raw chars, and auto-inserts the "-" at position 5. So the
+                // user types "BSTL17C4A9C" and the field shows "BSTL1-7C4A9C";
+                // typing "-" itself is silently filtered out.
+                TextField("token (e.g. ABCDE-123456)", text: Binding(
+                    get: { joinCode },
+                    set: { joinCode = Self.formatTokenInput($0) }
+                ))
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 180)
                     .font(.system(.body, design: .monospaced))
@@ -226,5 +233,15 @@ struct RelayView: View {
     private func cancelOrDisconnect() {
         advertRelay.tunnelSend = nil
         tunnel.disconnect()
+    }
+
+    /// Strip non-alphanumeric, uppercase, cap at 11 raw chars (5-char code + 6
+    /// hex routing). Auto-insert the "-" separator at position 5 so the user
+    /// never has to type it.
+    static func formatTokenInput(_ raw: String) -> String {
+        let clean = String(raw.uppercased().filter { $0.isLetter || $0.isNumber }.prefix(11))
+        if clean.count < 5 { return clean }
+        let splitIdx = clean.index(clean.startIndex, offsetBy: 5)
+        return String(clean[..<splitIdx]) + "-" + String(clean[splitIdx...])
     }
 }

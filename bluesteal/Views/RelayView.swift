@@ -76,18 +76,16 @@ struct RelayView: View {
                 .controlSize(.small)
 
             if showJoinField {
-                // Custom binding strips non-alphanumeric, uppercases, caps at
-                // 11 raw chars, and auto-inserts the "-" at position 5. So the
-                // user types "BSTL17C4A9C" and the field shows "BSTL1-7C4A9C";
-                // typing "-" itself is silently filtered out.
-                TextField("token (e.g. ABCDE-123456)", text: Binding(
-                    get: { joinCode },
-                    set: { joinCode = Self.formatTokenInput($0) }
-                ))
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 180)
-                    .font(.system(.body, design: .monospaced))
-                    .onSubmit { submitJoin() }
+                // Auto-formats as you type (uppercase, strip non-alphanumeric,
+                // cap at 11, auto-insert "-" at position 5) while PRESERVING the
+                // caret — matching the Windows/Android join fields. A plain
+                // SwiftUI reformatting binding snaps the caret to the end.
+                TokenTextField(
+                    text: $joinCode,
+                    placeholder: "token (e.g. ABCDE-123456)",
+                    onSubmit: submitJoin
+                )
+                .frame(width: 180)
                 Button("Connect", action: submitJoin)
                     .controlSize(.small)
                     .disabled(!joinInputValid)
@@ -243,5 +241,77 @@ struct RelayView: View {
         if clean.count < 5 { return clean }
         let splitIdx = clean.index(clean.startIndex, offsetBy: 5)
         return String(clean[..<splitIdx]) + "-" + String(clean[splitIdx...])
+    }
+}
+
+/// An `NSTextField` that auto-formats a tunnel token as you type while keeping
+/// the caret where it belongs. SwiftUI's `TextField` with a reformatting
+/// `Binding` snaps the insertion point to the end after every keystroke, which
+/// makes mid-string edits and backspaces jump. The Windows (`SelectionStart`)
+/// and Android (`TextFieldValue`) join fields both preserve the caret; this is
+/// the AppKit equivalent. Tokens are ASCII (`A–Z`, `0–9`, `-`), so UTF-16
+/// offsets and Character offsets coincide.
+struct TokenTextField: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder: String
+    var onSubmit: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let field = NSTextField()
+        field.placeholderString = placeholder
+        field.font = .monospacedSystemFont(ofSize: NSFont.systemFontSize, weight: .regular)
+        field.delegate = context.coordinator
+        field.isBezeled = true
+        field.bezelStyle = .roundedBezel
+        field.usesSingleLineMode = true
+        field.lineBreakMode = .byClipping
+        field.cell?.isScrollable = true
+        return field
+    }
+
+    func updateNSView(_ field: NSTextField, context: Context) {
+        // Only push external changes; avoid clobbering the caret during edits.
+        if field.stringValue != text { field.stringValue = text }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    final class Coordinator: NSObject, NSTextFieldDelegate {
+        private let parent: TokenTextField
+        init(_ parent: TokenTextField) { self.parent = parent }
+
+        func controlTextDidChange(_ obj: Notification) {
+            guard let field = obj.object as? NSTextField else { return }
+            let editor = field.currentEditor()
+            let raw = field.stringValue
+
+            // Logical caret = count of alphanumerics before the insertion point.
+            let selLoc = editor?.selectedRange.location ?? (raw as NSString).length
+            let prefixEnd = min(selLoc, (raw as NSString).length)
+            let logicalPos = (raw as NSString).substring(to: prefixEnd)
+                .filter { $0.isLetter || $0.isNumber }.count
+
+            let formatted = RelayView.formatTokenInput(raw)
+            if formatted != raw {
+                field.stringValue = formatted
+                // Re-place the caret at the logical position, skipping past the
+                // auto-inserted "-" at index 5.
+                let caret = (logicalPos >= 5 && formatted.count > 5)
+                    ? min(logicalPos + 1, formatted.count)
+                    : min(logicalPos, formatted.count)
+                editor?.selectedRange = NSRange(location: caret, length: 0)
+            }
+            parent.text = formatted
+        }
+
+        func control(_ control: NSControl,
+                     textView: NSTextView,
+                     doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                parent.onSubmit()
+                return true
+            }
+            return false
+        }
     }
 }

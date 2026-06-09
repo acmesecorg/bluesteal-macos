@@ -46,17 +46,28 @@ struct ReceivedQRView: View {
 
     var body: some View {
         VStack(spacing: 16) {
-            Text("QR from peer")
+            Text("QR Code Received")
                 .font(.headline)
-            Text("Scan this with your phone")
+            Text("Scan with another device")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             QRCodeView(uri: uri)
                 .frame(width: 260, height: 260)
-            Button("Done") { dismiss() }
-                .keyboardShortcut(.defaultAction)
         }
         .padding(28)
         .frame(minWidth: 320)
+        // macOS sheets have no swipe-to-dismiss, so keep a close affordance: a
+        // discreet top-trailing button plus Esc (matches the phones' "no Done
+        // button" look while staying dismissable).
+        .overlay(alignment: .topTrailing) {
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .imageScale(.medium)
+            }
+            .buttonStyle(.borderless)
+            .keyboardShortcut(.cancelAction)
+            .padding(12)
+            .help("Close")
+        }
     }
 }

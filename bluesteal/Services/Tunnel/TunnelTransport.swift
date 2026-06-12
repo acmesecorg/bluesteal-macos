@@ -51,6 +51,11 @@ final class TunnelTransport {
     private(set) var messagesReceived = 0
     private(set) var heartbeatCount = 0
 
+    /// caBLE tunnel-server domain resolved for the current session — e.g.
+    /// "cable.ua5v.com" (Google) or "cable.auth.com" (Apple). Surfaced in the
+    /// "tunnel open" status so we can tell which provider's tunnel was used.
+    var tunnelDomain: String { host }
+
     /// Decrypted advert/unknown frames (raw JSON bytes) for AdvertRelay.
     var onFrame: (@MainActor ([UInt8]) -> Void)?
 

@@ -192,7 +192,7 @@ struct RelayView: View {
         case .hosting:                                 return "tunnel hosting"
         case .joining(let c):                          return "tunnel joining \(c)"
         case .negotiating:                             return "tunnel negotiating"
-        case .open:                                    return "tunnel open"
+        case .open:                                    return "tunnel open (\(tunnel.tunnelDomain))"
         case .closed(let r):                           return "closed (\(r))"
         }
     }

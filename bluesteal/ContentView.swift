@@ -44,7 +44,7 @@ struct ContentView: View {
 
             if store.adverts.isEmpty && advertRelay.received.isEmpty {
                 ContentUnavailableView {
-                    Label("Waiting for caBLE adverts", systemImage: "antenna.radiowaves.left.and.right")
+                    Label("Waiting for adverts", systemImage: "antenna.radiowaves.left.and.right")
                 } description: {
                     Text("Listening for service data under UUIDs 0xFFF9 (FIDO) and 0xFDE2 (Google).\nStart a hybrid sign-in flow on a nearby phone or laptop.")
                         .multilineTextAlignment(.center)

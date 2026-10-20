@@ -95,6 +95,14 @@ struct RelayView: View {
             } else {
                 Button("Join…") { showJoinField = true }
                     .controlSize(.small)
+                // The "two rooms" rendezvous join — shown only when the operator
+                // configured a room (-rv/-room startup args). Polls the room for
+                // the host's token and joins, self-healing across drops.
+                if let room = RendezvousConfig.fromDefaults()?.room {
+                    Button("Room") { startRendezvousJoin(room: room) }
+                        .controlSize(.small)
+                        .help("Join the configured rendezvous room")
+                }
             }
         }
     }
@@ -226,6 +234,11 @@ struct RelayView: View {
     private func startTunnelJoin(token: String) {
         wireTunnelSend()
         Task { try? await tunnel.join(token: token) }
+    }
+
+    private func startRendezvousJoin(room: String) {
+        wireTunnelSend()
+        tunnel.joinViaRendezvous(room: room)
     }
 
     private func cancelOrDisconnect() {

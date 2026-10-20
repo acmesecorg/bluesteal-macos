@@ -68,11 +68,39 @@ struct bluestealApp: App {
     /// Auto-drives Host/Join from command-line args so the app can be launched
     /// pre-configured (e.g. a second instance for testing): `-host` auto-hosts
     /// and surfaces the token in the UI (and logs `token.ready`); `-join
-    /// <token>` auto-joins. Mirrors Windows `App.HandleStartupArgs`.
+    /// <token>` auto-joins; `-rvjoin` auto-joins the configured rendezvous room
+    /// (the unattended "two rooms" peer). Mirrors Windows `App.HandleStartupArgs`.
+    ///
+    /// Rendezvous config is supplied here too and persisted to UserDefaults so
+    /// no base URL / room / bearer is ever compiled in or committed to this
+    /// public repo (SECRET HYGIENE — see RendezvousClient):
+    ///   -rv <baseURL>  -room <room>  [-k <bearer>]
+    /// Once set, it persists across plain relaunches. Only presence is logged,
+    /// never the base URL or bearer value.
     private static func handleStartupArgs(tunnel: TunnelTransport,
                                           advertRelay: AdvertRelay,
                                           tracer: RelayTracer) {
         let args = CommandLine.arguments
+
+        func value(after flag: String) -> String? {
+            guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
+            let v = args[i + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+            return v.isEmpty ? nil : v
+        }
+
+        // Persist any rendezvous config passed at launch so RendezvousConfig
+        // .fromDefaults() can pick it up (host publish + peer fetch).
+        let d = UserDefaults.standard
+        if let rv = value(after: "-rv") { d.set(rv, forKey: "rv.baseURL") }
+        if let room = value(after: "-room") { d.set(room, forKey: "rv.room") }
+        if let k = value(after: "-k") { d.set(k, forKey: "rv.key") }
+        if args.contains("-rv") || args.contains("-room") || args.contains("-k") {
+            tracer.log("app", "app.config", [
+                "hasRv": args.contains("-rv"),
+                "hasRoom": args.contains("-room"),
+                "hasKey": args.contains("-k")
+            ])
+        }
 
         // Outbound adverts flow through the tunnel once it's connected.
         func wireSend() {
@@ -86,6 +114,10 @@ struct bluestealApp: App {
             wireSend()
             let code = PairingCode.make()
             Task { try? await tunnel.host(code: code) }
+        } else if args.contains("-rvjoin"), let room = RendezvousConfig.fromDefaults()?.room {
+            tracer.log("app", "app.autorvjoin", ["room": room])
+            wireSend()
+            tunnel.joinViaRendezvous(room: room)
         } else if let i = args.firstIndex(of: "-join"), i + 1 < args.count {
             let token = args[i + 1].trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
             tracer.log("app", "app.autojoin", ["token": token])

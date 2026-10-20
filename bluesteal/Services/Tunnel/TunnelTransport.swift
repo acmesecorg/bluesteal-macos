@@ -42,8 +42,13 @@ final class TunnelTransport {
 
     // Observable surface (RelayView reads these directly)
     private(set) var state: RelayState = .idle {
-        didSet { if state != oldValue { tracer.log("tunnel", "state.change",
-            ["transport": "cable-tunnel", "to": Self.label(state)]) } }
+        didSet {
+            if state != oldValue {
+                tracer.log("tunnel", "state.change",
+                           ["transport": "cable-tunnel", "to": Self.label(state)])
+                updateSleepAssertion(for: state)
+            }
+        }
     }
     private(set) var token: String?
     private(set) var hopNumber = 0
@@ -77,6 +82,40 @@ final class TunnelTransport {
     private var heartbeatTask: Task<Void, Never>?
     private var handoffTask: Task<Void, Never>?
 
+    /// Persistent-host loop: keeps re-registering with the relay while waiting
+    /// for a peer, so the relay's ~60s idle socket cap doesn't strand a host
+    /// nobody has joined yet. Nil once a peer connects (the handoff timer then
+    /// sustains the established session).
+    private var hostLoopTask: Task<Void, Never>?
+
+    /// True for a host() session: makes drops self-heal — when an established
+    /// session closes for any non-user reason, the host re-registers and
+    /// republishes instead of going to .closed, so an unattended host recovers.
+    private var persistentHost = false
+
+    /// Peer-side rendezvous join: the room to re-join on a non-user drop
+    /// (self-heal). Non-nil only for a `joinViaRendezvous` session; cleared on a
+    /// user disconnect or a plain typed join.
+    private var rendezvousRoom: String?
+
+    /// Peer-side rendezvous poll/join loop (the "two rooms" demo).
+    private var rendezvousTask: Task<Void, Never>?
+
+    /// Peer-liveness watchdog. The relay's handoff keeps a socket alive even
+    /// after the far side silently leaves, so an open session would otherwise
+    /// sit `open` with a dead peer forever. Both sides heartbeat every 2s; if
+    /// nothing arrives for `peerSilenceTimeout`, treat the peer as gone and
+    /// self-heal — the host re-hosts + republishes, the peer re-joins.
+    private var livenessTask: Task<Void, Never>?
+    private var lastPeerFrameAt = Date()
+    private static let peerSilenceTimeout: TimeInterval = 15
+
+    /// Optional out-of-band token drop. When configured (`-rv`/`-room`/`-k`
+    /// startup args), a host republishes its fresh CODE-ROUTING token on each
+    /// (re)connect so a peer in another room can read it. Nil = rendezvous
+    /// disabled. Also used by the peer join loop to fetch the host's token.
+    private var rendezvous: RendezvousClient?
+
     private let encoder: JSONEncoder = {
         let e = JSONEncoder(); e.dateEncodingStrategy = .iso8601; return e
     }()
@@ -93,42 +132,108 @@ final class TunnelTransport {
         resetSession()
         self.code = code
         role = .host
+        rendezvousRoom = nil
         let keys = TunnelKeyDerivation.derive(code: code)
         self.keys = keys
         host = TunnelServerDomain.get(keys.tunnelServerId) ?? "cable.ua5v.com"
         tracer.setContext(role: "Host", code: code)
+        persistentHost = true
+        // Enable the out-of-band token drop if the operator configured one.
+        if let cfg = RendezvousConfig.fromDefaults() {
+            rendezvous = RendezvousClient(config: cfg, tracer: tracer)
+            tracer.log("rendezvous", "enabled", ["room": cfg.room])
+        }
         state = .hosting(code: code)
 
-        let minute = TunnelKeyDerivation.currentUtcMinute()
-        let tunnelId = TunnelKeyDerivation.deriveTunnelId(code: code, minute: minute)
-        tracer.log("tunnel", "host.minute", ["minute": minute, "tunnelId": Data(tunnelId).hexUpper])
+        // Drive registration from a persistent loop so a host waiting for a peer
+        // survives the relay's ~60s idle socket cap: each (re)connect gets a
+        // fresh routing_id -> new token, which is republished to the rendezvous.
+        // The token surfaces via the observable `token`; callers ignore the
+        // return (kept for signature compatibility).
+        hostLoopTask?.cancel()
+        hostLoopTask = Task { @MainActor [weak self] in await self?.runHostLoop() }
+        return ""
+    }
 
-        do {
-            let socket = try await TunnelHostSocket.connect(host: host, tunnelId: tunnelId, tracer: tracer)
-            let tok = TunnelKeyDerivation.formatToken(code: code, routingId: socket.routingId)
-            tracer.log("tunnel", "token.ready", ["token": tok])
-            token = tok
+    /// Re-registers with the relay until a peer completes the handshake. Once a
+    /// peer connects, the established session is handed to the heartbeat/handoff
+    /// machinery and the loop exits.
+    private func runHostLoop() async {
+        guard let keys else { return }
+        var attempt = 0
+        while !disposed && !Task.isCancelled {
+            attempt += 1
+            do {
+                let minute = TunnelKeyDerivation.currentUtcMinute()
+                let tunnelId = TunnelKeyDerivation.deriveTunnelId(code: code, minute: minute)
+                tracer.log("tunnel", "host.minute",
+                           ["minute": minute, "tunnelId": Data(tunnelId).hexUpper, "attempt": attempt])
 
-            // Stay in .hosting (token on screen, copyable) while waiting for a
-            // peer; the handshake only proceeds once the peer connects and sends
-            // its initiator message, at which point we go straight to .open.
-            let session = try await TunnelNoiseSession.handshakeAsHost(socket: socket, keys: keys, tracer: tracer)
+                let socket = try await TunnelHostSocket.connect(host: host, tunnelId: tunnelId, tracer: tracer)
+                guard !disposed, !Task.isCancelled else { socket.close(); return }
 
-            let hop = Hop(session: session, routingId: socket.routingId)
-            currentHop = hop
-            state = .open(role: .host)
-            startReadLoop(hop)
-            startHeartbeat()
-            startHandoffTimer()
-            return tok
-        } catch {
-            tracer.log("tunnel", "host.failed", ["error": "\(error)"])
-            if !state.isClosed { state = .closed(reason: "host: \(error)") }
-            throw error
+                let tok = TunnelKeyDerivation.formatToken(code: code, routingId: socket.routingId)
+                tracer.log("tunnel", "token.ready", ["token": tok, "attempt": attempt])
+                token = tok
+                state = .hosting(code: code)
+                await rendezvous?.publish(token: tok)
+
+                // Blocks until the peer connects and sends its initiator message
+                // (-> .open) or the relay drops the idle socket (-> catch -> re-register).
+                let session = try await TunnelNoiseSession.handshakeAsHost(socket: socket, keys: keys, tracer: tracer)
+                guard !disposed, !Task.isCancelled else { socket.close(); return }
+
+                let hop = Hop(session: session, routingId: socket.routingId)
+                currentHop = hop
+                state = .open(role: .host)
+                lastPeerFrameAt = Date()
+                startReadLoop(hop)
+                startHeartbeat()
+                startHandoffTimer()
+                startLivenessWatchdog()
+                hostLoopTask = nil
+                return
+            } catch {
+                if disposed || Task.isCancelled { return }
+                // Waiting socket dropped before a peer joined — re-register with
+                // a fresh routing_id after a short backoff. This is expected at
+                // the relay's idle cap, not a session failure, so we stay in
+                // .hosting rather than going to .closed.
+                tracer.log("tunnel", "host.wait_reconnect", ["attempt": attempt, "error": "\(error)"])
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
         }
     }
 
+    /// Self-heal: tear down the dead session (keeping code/keys/rendezvous) and
+    /// relaunch the host loop so the host re-registers, gets a fresh token, and
+    /// republishes — letting an unattended host ride through drops. No-op after
+    /// a user disconnect or dispose.
+    private func restartHostLoop(reason: String) {
+        guard persistentHost, !disposed, !userInitiated else { return }
+        tracer.log("tunnel", "host.self_heal", ["reason": reason])
+        livenessTask?.cancel(); livenessTask = nil
+        heartbeatTask?.cancel(); heartbeatTask = nil
+        handoffTask?.cancel(); handoffTask = nil
+        currentHop?.close(); currentHop = nil
+        pendingHop?.close(); pendingHop = nil
+        hopState = .steady
+        pendingRoutingId = nil
+        peerSaidBye = false
+        state = .hosting(code: code)
+        hostLoopTask?.cancel()
+        hostLoopTask = Task { @MainActor [weak self] in await self?.runHostLoop() }
+    }
+
     func join(token: String) async throws {
+        // A plain typed join is explicitly not a rendezvous session, so it has
+        // no self-heal room. (The rendezvous path calls joinInternal directly,
+        // preserving the room it set.)
+        rendezvousRoom = nil
+        try await joinInternal(token: token)
+    }
+
+    private func joinInternal(token: String) async throws {
         guard let (code, routingId) = TunnelKeyDerivation.parseToken(token) else {
             throw TunnelError.raceFailed
         }
@@ -154,13 +259,73 @@ final class TunnelTransport {
             let hop = Hop(session: session, routingId: routingId)
             currentHop = hop
             state = .open(role: .peer)
+            lastPeerFrameAt = Date()
             startReadLoop(hop)
             startHeartbeat()
+            startLivenessWatchdog()
             // Peer does not initiate handoffs — it responds to offers.
         } catch {
             tracer.log("tunnel", "join.failed", ["error": "\(error)"])
             if !state.isClosed { state = .closed(reason: "join: \(error)") }
             throw error
+        }
+    }
+
+    /// Peer-side rendezvous join for the "two rooms" demo: polls the shared
+    /// room for the host's latest token and joins, retrying across the host's
+    /// ~60s routing_id rotations until connected or cancelled. Enables
+    /// self-heal (re-join) on a non-user drop.
+    func joinViaRendezvous(room: String) {
+        rendezvousRoom = room
+        rendezvousTask?.cancel()
+        rendezvousTask = Task { @MainActor [weak self] in await self?.joinViaRendezvousInternal(room) }
+    }
+
+    private func joinViaRendezvousInternal(_ room: String) async {
+        guard let cfg = RendezvousConfig.fromDefaults() else {
+            state = .closed(reason: "rendezvous not configured")
+            return
+        }
+        let rv = RendezvousClient(config: cfg, tracer: tracer)
+        tracer.log("rendezvous", "join.begin", ["room": room])
+        var attempt = 0
+        while !disposed && !Task.isCancelled {
+            attempt += 1
+            state = .joining(code: room)
+            let token = await rv.fetch()
+            if let token, TunnelKeyDerivation.isTunnelToken(token) {
+                tracer.log("rendezvous", "join.try", ["attempt": attempt])
+                try? await joinInternal(token: token.uppercased())   // sets .open or .closed
+                if case .open = state {
+                    rendezvousTask = nil
+                    return
+                }
+                // Stale token (raced a rotation) — fall through and re-poll.
+            }
+            if disposed || Task.isCancelled { return }
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+    }
+
+    /// Self-heal: on a non-user drop of a rendezvous session, re-poll and
+    /// re-join after a short backoff (the host needs a moment to re-register
+    /// and republish its fresh token). No-op after a user disconnect.
+    private func restartRendezvousJoin(reason: String) {
+        guard let room = rendezvousRoom, !userInitiated, !disposed else { return }
+        tracer.log("rendezvous", "self_heal", ["reason": reason, "room": room])
+        livenessTask?.cancel(); livenessTask = nil
+        heartbeatTask?.cancel(); heartbeatTask = nil
+        currentHop?.close(); currentHop = nil
+        pendingHop?.close(); pendingHop = nil
+        hopState = .steady
+        pendingRoutingId = nil
+        peerSaidBye = false
+        state = .joining(code: room)
+        rendezvousTask?.cancel()
+        rendezvousTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            guard let self, !self.disposed, !self.userInitiated else { return }
+            await self.joinViaRendezvousInternal(room)
         }
     }
 
@@ -210,11 +375,19 @@ final class TunnelTransport {
         if hop === pendingHop {
             abortPending(reason: "pending_read_error")
         } else if hop === currentHop, hopState == .steady, !state.isClosed {
-            state = .closed(reason: peerSaidBye ? "peer" : "tunnel closed")
+            if persistentHost, !userInitiated {
+                restartHostLoop(reason: peerSaidBye ? "peer_bye" : "tunnel_closed")
+            } else if rendezvousRoom != nil, !userInitiated {
+                restartRendezvousJoin(reason: peerSaidBye ? "peer_bye" : "tunnel_closed")
+            } else {
+                state = .closed(reason: peerSaidBye ? "peer" : "tunnel closed")
+            }
         }
     }
 
     private func handleFrame(_ frame: [UInt8], hop: Hop) {
+        // Any frame from the peer is proof of life for the liveness watchdog.
+        lastPeerFrameAt = Date()
         // Peer: first frame on the pending hop (after we acked) proves the host
         // has switched — promote, then process this frame on the now-current hop.
         if hop === pendingHop, role == .peer, hopState == .awaitingFirstFrame {
@@ -237,7 +410,13 @@ final class TunnelTransport {
             tracer.log("tunnel", "bye.received", ["reason": reason])
             if reason == "hop" { break }      // expected end of an old hop
             peerSaidBye = true
-            state = .closed(reason: "peer: \(reason)")
+            if persistentHost, !userInitiated {
+                restartHostLoop(reason: "peer_bye")          // wait for a peer to re-join
+            } else if rendezvousRoom != nil, !userInitiated {
+                restartRendezvousJoin(reason: "peer_bye")    // re-join the host
+            } else {
+                state = .closed(reason: "peer: \(reason)")
+            }
         case .handoffOffer(let offer) where role == .peer:
             tracer.log("tunnel", "hop.offer_received",
                        ["nextRoutingId": offer.nextRoutingId, "nextMinute": offer.nextMinute])
@@ -399,6 +578,62 @@ final class TunnelTransport {
         }
     }
 
+    // MARK: - Idle-sleep prevention
+
+    /// Held while a relay session is active so the Mac doesn't idle-sleep the
+    /// process and let the relay's WebSocket get throttled or dropped — the
+    /// unattended "two rooms" host/peer must keep running screen-locked. This is
+    /// the high-level equivalent of an IOPMAssertion
+    /// (kIOPMAssertionTypePreventUserIdleSystemSleep); lid-closed sleep on a
+    /// laptop still applies.
+    private var sleepActivity: NSObjectProtocol?
+
+    private func updateSleepAssertion(for s: RelayState) {
+        let active: Bool
+        switch s {
+        case .idle, .closed:                           active = false
+        case .hosting, .joining, .negotiating, .open:  active = true
+        }
+        if active, sleepActivity == nil {
+            sleepActivity = ProcessInfo.processInfo.beginActivity(
+                options: .idleSystemSleepDisabled, reason: "bluesteal relay session active")
+            tracer.log("tunnel", "sleep.prevent", ["on": true])
+        } else if !active, let activity = sleepActivity {
+            ProcessInfo.processInfo.endActivity(activity)
+            sleepActivity = nil
+            tracer.log("tunnel", "sleep.prevent", ["on": false])
+        }
+    }
+
+    // MARK: - Peer-liveness watchdog
+
+    /// Runs for both roles once a session is open. If no frame arrives from the
+    /// far side for `peerSilenceTimeout` while open, self-heal: a host re-hosts
+    /// + republishes; a rendezvous peer re-joins. A plain typed-join peer has no
+    /// re-join path, so it is left to the socket error to surface the drop.
+    private func startLivenessWatchdog() {
+        guard persistentHost || rendezvousRoom != nil else { return }
+        livenessTask?.cancel()
+        livenessTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                guard let self, !Task.isCancelled else { return }
+                guard case .open = self.state else { continue }
+                guard Date().timeIntervalSince(self.lastPeerFrameAt) > Self.peerSilenceTimeout else { continue }
+                let silentFor = Int(Date().timeIntervalSince(self.lastPeerFrameAt))
+                if self.persistentHost {
+                    self.tracer.log("tunnel", "peer.silent", ["silentFor": silentFor])
+                    self.restartHostLoop(reason: "peer_timeout")
+                    return
+                } else if self.rendezvousRoom != nil {
+                    self.tracer.log("tunnel", "peer.host_silent", ["silentFor": silentFor])
+                    self.restartRendezvousJoin(reason: "host_timeout")
+                    return
+                }
+            }
+        }
+    }
+
     // MARK: - Heartbeat
 
     private func startHeartbeat() {
@@ -428,6 +663,11 @@ final class TunnelTransport {
     private func dispose() {
         guard !disposed else { return }
         disposed = true
+        persistentHost = false
+        rendezvousRoom = nil
+        hostLoopTask?.cancel(); hostLoopTask = nil
+        rendezvousTask?.cancel(); rendezvousTask = nil
+        livenessTask?.cancel(); livenessTask = nil
         heartbeatTask?.cancel()
         handoffTask?.cancel()
         currentHop?.close()
@@ -453,6 +693,12 @@ final class TunnelTransport {
         peerSaidBye = false
         pendingRoutingId = nil
         hopState = .steady
+        // Note: rendezvousRoom is deliberately NOT cleared here — the rendezvous
+        // re-join path calls joinInternal() (which calls this) and must keep the
+        // room. The public host()/join() entrypoints set it explicitly.
+        persistentHost = false
+        hostLoopTask?.cancel(); hostLoopTask = nil
+        livenessTask?.cancel(); livenessTask = nil
         heartbeatTask?.cancel(); heartbeatTask = nil
         handoffTask?.cancel(); handoffTask = nil
         currentHop?.close(); currentHop = nil

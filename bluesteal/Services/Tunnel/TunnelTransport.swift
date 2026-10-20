@@ -39,6 +39,12 @@ final class TunnelTransport {
     private static let hostAckTimeout: UInt64 = 50
     private static let peerFirstFrameTimeout: UInt64 = 55
     private static let oldHopLinger: UInt64 = 15
+    // A handoff that fails to even open its next socket (`hop.begin_failed`)
+    // otherwise strands the session until the next 30s tick — by then the
+    // current socket is past the relay's ~60s cap and dead. Retry quickly so a
+    // transient network blip doesn't kill the whole session.
+    private static let handoffRetryInterval: UInt64 = 5
+    private static let handoffMaxRetries = 5
 
     // Observable surface (RelayView reads these directly)
     private(set) var state: RelayState = .idle {
@@ -441,6 +447,20 @@ final class TunnelTransport {
                 guard case .open = self.state else { break }
                 guard self.hopState == .steady else { continue }
                 await self.initiateHandoff()
+
+                // After initiateHandoff, hopState is .pendingAck on success (the
+                // next socket opened; ack flow takes over) or back to .steady on
+                // a begin_failed. On failure, retry quickly rather than waiting a
+                // full interval, so one blip doesn't strand us past the ~60s cap.
+                var retries = 0
+                while retries < Self.handoffMaxRetries, !Task.isCancelled {
+                    guard case .open = self.state, self.hopState == .steady else { break }
+                    try? await Task.sleep(nanoseconds: Self.handoffRetryInterval * 1_000_000_000)
+                    guard !Task.isCancelled, case .open = self.state, self.hopState == .steady else { break }
+                    retries += 1
+                    self.tracer.log("tunnel", "hop.retry", ["attempt": retries])
+                    await self.initiateHandoff()
+                }
             }
         }
     }
